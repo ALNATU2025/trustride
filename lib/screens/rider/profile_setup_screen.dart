@@ -68,7 +68,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     final cPhone = _contactPhone.text.trim();
     setState(() => _saving = true);
     try {
-      await Db.createOrUpdateProfile(
+      await Db.guard(Db.createOrUpdateProfile(
         uid: user.uid,
         phone: user.phoneNumber ?? '',
         name: _name.text.trim(),
@@ -82,7 +82,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                     ? 'Emergency contact'
                     : _contactName.text.trim(),
                 AuthService.normalise(cPhone)),
-      );
+      ));
       if (!mounted) return;
       if (exists) {
         showToast(context, 'Profile saved');

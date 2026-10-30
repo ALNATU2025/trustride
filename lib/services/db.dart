@@ -33,6 +33,15 @@ class Db {
 
   static FieldValue get now => FieldValue.serverTimestamp();
 
+  /// Fails with a clear message instead of waiting forever when the
+  /// database can't be reached (offline, or Firestore not created yet).
+  static Future<T> guard<T>(Future<T> f) => f.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () => throw Exception(
+            'Can\u2019t reach the TrustRide database. Check your internet '
+            'connection, and that Firestore Database is created in Firebase.'),
+      );
+
   // ---------------- config ----------------
   static Stream<AppConfig> configStream() => configDoc
       .snapshots()

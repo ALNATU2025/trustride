@@ -80,7 +80,7 @@ class _DriverSignupScreenState extends State<DriverSignupScreen> {
     }
     setState(() => _saving = true);
     try {
-      await Db.submitDriverApplication(
+      await Db.guard(Db.submitDriverApplication(
         uid: uid,
         exists: s.driver != null,
         fields: {
@@ -95,7 +95,7 @@ class _DriverSignupScreenState extends State<DriverSignupScreen> {
           'payoutProvider': _provider,
           'payoutNumber': AuthService.normalise(_payout.text),
         },
-      );
+      ));
       if (!mounted) return;
       setState(() => _editing = false);
       showToast(context, 'Application sent — we’ll review it shortly',
