@@ -45,7 +45,7 @@ class GeoService {
     final data = jsonDecode(res.body);
     if (data is! List) return [];
     return data.map<Place>((e) {
-      final m = toMap(e);
+      final m = asMap(e);
       final display = toS(m['display_name']);
       final name = toS(m['name']);
       return Place(
@@ -69,8 +69,8 @@ class GeoService {
       });
       final res = await http.get(uri, headers: _headers);
       if (res.statusCode == 200) {
-        final m = toMap(jsonDecode(res.body));
-        final a = toMap(m['address']);
+        final m = asMap(jsonDecode(res.body));
+        final a = asMap(m['address']);
         final road = toS(a['road']);
         final area = toS(a['suburb'],
             toS(a['neighbourhood'], toS(a['city_district'], toS(a['town']))));
@@ -106,11 +106,11 @@ class GeoService {
           {'overview': 'full', 'geometries': 'geojson'});
       final res = await http.get(uri, headers: _headers);
       if (res.statusCode == 200) {
-        final m = toMap(jsonDecode(res.body));
+        final m = asMap(jsonDecode(res.body));
         final routes = m['routes'];
         if (routes is List && routes.isNotEmpty) {
-          final r = toMap(routes.first);
-          final coords = toMap(r['geometry'])['coordinates'];
+          final r = asMap(routes.first);
+          final coords = asMap(r['geometry'])['coordinates'];
           final pts = <LatLng>[];
           if (coords is List) {
             for (final c in coords) {

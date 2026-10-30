@@ -8,7 +8,7 @@ int toI(dynamic v, [int fallback = 0]) => v is num ? v.toInt() : fallback;
 String toS(dynamic v, [String fallback = '']) => v is String ? v : fallback;
 bool toB(dynamic v, [bool fallback = false]) => v is bool ? v : fallback;
 DateTime? toDate(dynamic v) => v is Timestamp ? v.toDate() : null;
-Map<String, dynamic> toMap(dynamic v) =>
+Map<String, dynamic> asMap(dynamic v) =>
     v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
 
 /// Freetown city centre — used when location is unavailable.
@@ -33,7 +33,7 @@ class Place {
       {'label': label, 'address': address, 'lat': lat, 'lng': lng};
 
   static Place? fromMap(dynamic raw) {
-    final m = toMap(raw);
+    final m = asMap(raw);
     if (m['lat'] is! num || m['lng'] is! num) return null;
     return Place(
       label: toS(m['label'], 'Pinned location'),
@@ -164,7 +164,7 @@ class AppConfig {
     if (m == null) return defaults;
     final rides = (m['rideTypes'] is List)
         ? (m['rideTypes'] as List)
-            .map((e) => RideType.fromMap(toMap(e)))
+            .map((e) => RideType.fromMap(asMap(e)))
             .where((r) => r.id.isNotEmpty)
             .toList()
         : defaults.rideTypes;
@@ -199,7 +199,7 @@ class Contact {
   final String phone;
   Map<String, dynamic> toMap() => {'name': name, 'phone': phone};
   static Contact fromMap(dynamic raw) {
-    final m = toMap(raw);
+    final m = asMap(raw);
     return Contact(toS(m['name']), toS(m['phone']));
   }
 }
@@ -245,8 +245,8 @@ class AppUser {
 
   factory AppUser.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
     final m = d.data() ?? {};
-    final settings = toMap(m['settings']);
-    final places = toMap(m['savedPlaces']);
+    final settings = asMap(m['settings']);
+    final places = asMap(m['savedPlaces']);
     return AppUser(
       uid: d.id,
       name: toS(m['name']),
