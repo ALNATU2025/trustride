@@ -1,0 +1,139 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+
+import '../../core/routes.dart';
+import '../../core/theme.dart';
+
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(const Duration(milliseconds: 2800), _go);
+  }
+
+  void _go() {
+    _timer?.cancel();
+    if (mounted) Navigator.of(context).pushReplacementNamed(R.onboarding);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: GestureDetector(
+        onTap: _go,
+        behavior: HitTestBehavior.opaque,
+        child: Stack(
+          children: [
+            // soft brand glow
+            Positioned(
+              top: -120,
+              right: -120,
+              child: _Glow(color: TR.greenBright.fade(0.16), size: 320),
+            ),
+            Positioned(
+              bottom: -140,
+              left: -120,
+              child: _Glow(color: TR.navy.fade(0.10), size: 360),
+            ),
+            SafeArea(
+              child: Column(
+                children: [
+                  const Spacer(),
+                  Image.asset('assets/images/logo.png',
+                          width: 260, height: 260, semanticLabel: 'TrustRide')
+                      .animate()
+                      .scale(
+                          begin: const Offset(0.7, 0.7),
+                          duration: 900.ms,
+                          curve: Curves.elasticOut)
+                      .fadeIn(duration: 500.ms),
+                  const SizedBox(height: 28),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(3, (i) {
+                      return Container(
+                        width: 10,
+                        height: 10,
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: i == 1 ? TR.green : TR.navy,
+                        ),
+                      )
+                          .animate(onPlay: (c) => c.repeat(reverse: true))
+                          .scaleXY(
+                              begin: 0.6,
+                              end: 1.1,
+                              delay: (i * 160).ms,
+                              duration: 520.ms,
+                              curve: Curves.easeInOut);
+                    }),
+                  ).animate().fadeIn(delay: 600.ms),
+                  const Spacer(),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const _Flag(),
+                      const SizedBox(width: 8),
+                      Text('Made in Salone · Freetown', style: TS.small),
+                    ],
+                  ).animate().fadeIn(delay: 900.ms).slideY(begin: 0.4),
+                  const SizedBox(height: 28),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Glow extends StatelessWidget {
+  const _Glow({required this.color, required this.size});
+  final Color color;
+  final double size;
+  @override
+  Widget build(BuildContext context) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(colors: [color, color.fade(0)]),
+        ),
+      );
+}
+
+class _Flag extends StatelessWidget {
+  const _Flag();
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+        borderRadius: BorderRadius.circular(3),
+        child: Container(
+          width: 24,
+          height: 16,
+          decoration: BoxDecoration(border: Border.all(color: TR.border)),
+          child: const Column(children: [
+            Expanded(child: ColoredBox(color: Color(0xFF1EB53A))),
+            Expanded(child: ColoredBox(color: Colors.white)),
+            Expanded(child: ColoredBox(color: Color(0xFF0072C6))),
+          ]),
+        ),
+      );
+}
