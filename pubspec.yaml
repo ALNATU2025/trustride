@@ -10,7 +10,6 @@ dependencies:
   flutter:
     sdk: flutter
   google_fonts: ^6.2.1
-  phosphor_flutter: ^2.1.0
   flutter_animate: ^4.5.0
 
 dev_dependencies:
@@ -22,3 +21,15 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+
+  # Phosphor icon fonts (MIT), bundled so icons work on current Flutter.
+  fonts:
+    - family: PhosphorRegular
+      fonts:
+        - asset: assets/fonts/Phosphor.ttf
+    - family: PhosphorFill
+      fonts:
+        - asset: assets/fonts/Phosphor-Fill.ttf
+    - family: PhosphorBold
+      fonts:
+        - asset: assets/fonts/Phosphor-Bold.ttf

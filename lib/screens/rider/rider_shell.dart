@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../core/icons.dart';
 
 import '../../widgets/nav_bar.dart';
 import 'account_screen.dart';

@@ -46,7 +46,7 @@ lib/
   screens/rider|driver|admin/
 ```
 
-Packages: `google_fonts`, `phosphor_flutter` (icon set), `flutter_animate` (animations). No API keys needed.
+Packages: `google_fonts` and `flutter_animate` (animations). Icons are Phosphor (MIT), bundled in `assets/fonts` with constants in `lib/core/icons.dart` — the `phosphor_flutter` package does not build on current Flutter. No API keys needed.
 
 ## Going to production
 
