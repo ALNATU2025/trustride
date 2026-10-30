@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import '../../core/icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_state.dart';
-import '../../core/data.dart';
+import '../../core/icons.dart';
+import '../../core/models.dart';
+import '../../core/routes.dart';
 import '../../core/theme.dart';
+import '../../services/db.dart';
 import '../../widgets/common.dart';
 
 class HistoryTab extends StatefulWidget {
@@ -14,93 +17,96 @@ class HistoryTab extends StatefulWidget {
 }
 
 class _HistoryTabState extends State<HistoryTab> {
-  bool _past = true;
+  Stream<List<Trip>>? _trips;
+  String? _uid;
 
   @override
   Widget build(BuildContext context) {
     final s = AppScope.of(context);
-    final total = s.trips
-        .where((t) => t.status == TripStatus.completed)
-        .fold<double>(0, (a, t) => a + t.fare);
+    final uid = s.authUser?.uid;
+    if (uid != null && uid != _uid) {
+      _uid = uid;
+      _trips = Db.riderTrips(uid);
+    }
     return Container(
       color: TR.surface,
       child: SafeArea(
         bottom: false,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-          children: [
-            Text('My trips', style: TS.h2),
-            const SizedBox(height: 4),
-            Text('${s.trips.length} trips · ${TR.le(total)} spent', style: TS.small),
-            const SizedBox(height: 16),
-            Row(children: [
-              _seg('Past', _past, () => setState(() => _past = true)),
-              const SizedBox(width: 8),
-              _seg('Scheduled', !_past, () => setState(() => _past = false)),
-            ]),
-            const SizedBox(height: 16),
-            if (!_past)
-              Padding(
-                padding: const EdgeInsets.only(top: 60),
-                child: Column(children: [
-                  const IconBubble(PhosphorIconsFill.calendarBlank,
-                      size: 72, color: TR.green, bg: TR.greenTint),
-                  const SizedBox(height: 12),
-                  Text('No scheduled rides', style: TS.h3),
-                  const SizedBox(height: 4),
-                  Text('Book ahead for early flights at Lungi.',
-                      style: TS.small),
-                ]).animate().fadeIn().scale(begin: const Offset(0.95, 0.95)),
-              )
-            else
-              for (var i = 0; i < s.trips.length; i++)
-                _TripCard(trip: s.trips[i])
-                    .animate()
-                    .fadeIn(delay: (50 * i).ms)
-                    .slideY(begin: 0.15, curve: Curves.easeOutCubic),
-          ],
+        child: StreamBuilder<List<Trip>>(
+          stream: _trips,
+          builder: (context, snap) {
+            final trips = snap.data ?? const <Trip>[];
+            final done = trips.where((t) => t.status == TripStatus.completed);
+            final total = done.fold<double>(0, (a, t) => a + t.fare);
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+              children: [
+                Text('My trips', style: TS.h2),
+                const SizedBox(height: 4),
+                Text('${done.length} completed · ${TR.le(total)} spent',
+                    style: TS.small),
+                const SizedBox(height: 16),
+                if (snap.hasError)
+                  const EmptyState(
+                      icon: PhosphorIconsFill.warning,
+                      title: 'Couldn’t load trips',
+                      body: 'Check your connection and try again.')
+                else if (!snap.hasData)
+                  const Loading()
+                else if (trips.isEmpty)
+                  const EmptyState(
+                    icon: PhosphorIconsFill.carProfile,
+                    title: 'No trips yet',
+                    body: 'Your rides will appear here after you book.',
+                  )
+                else
+                  for (var i = 0; i < trips.length; i++)
+                    _TripCard(trip: trips[i])
+                        .animate()
+                        .fadeIn(delay: (40 * i.clamp(0, 10)).ms)
+                        .slideY(begin: 0.15, curve: Curves.easeOutCubic),
+              ],
+            );
+          },
         ),
       ),
     );
   }
-
-  Widget _seg(String label, bool on, VoidCallback tap) => Pressable(
-        onTap: tap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-          decoration: BoxDecoration(
-            color: on ? TR.navy : Colors.white,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: on ? TR.navy : TR.border),
-          ),
-          child: Text(label,
-              style: TS.label.copyWith(
-                  fontSize: 13, color: on ? Colors.white : TR.ink)),
-        ),
-      );
 }
 
 class _TripCard extends StatelessWidget {
   const _TripCard({required this.trip});
   final Trip trip;
 
+  (String, PillKind) get _status => switch (trip.status) {
+        TripStatus.completed => ('Completed', PillKind.success),
+        TripStatus.cancelled => ('Cancelled', PillKind.danger),
+        _ => ('In progress', PillKind.info),
+      };
+
   @override
   Widget build(BuildContext context) {
-    final done = trip.status == TripStatus.completed;
+    final st = _status;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Pressable(
         scale: 0.98,
-        onTap: () => _showReceipt(context),
+        onTap: () {
+          if (trip.isActive) {
+            AppScope.read(context).setCurrentTrip(trip.id);
+            Navigator.of(context).pushNamed(R.ride);
+          } else {
+            _showReceipt(context);
+          }
+        },
         child: TRCard(
           padding: const EdgeInsets.all(14),
           child: Column(children: [
             Row(children: [
-              Text(trip.when, style: TS.small.copyWith(fontWeight: FontWeight.w600)),
+              Text(dateLabel(trip.createdAt),
+                  style: TS.small.copyWith(fontWeight: FontWeight.w600)),
               const Spacer(),
-              Pill(done ? 'Completed' : 'Cancelled',
-                  kind: done ? PillKind.success : PillKind.danger),
+              Pill(st.$1, kind: st.$2),
             ]),
             const SizedBox(height: 12),
             Row(children: [
@@ -110,23 +116,29 @@ class _TripCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(trip.from, style: TS.label.copyWith(fontSize: 14)),
+                    Text(trip.pickup.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TS.label.copyWith(fontSize: 14)),
                     const SizedBox(height: 10),
-                    Text(trip.to, style: TS.label.copyWith(fontSize: 14)),
+                    Text(trip.dropoff.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TS.label.copyWith(fontSize: 14)),
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(TR.le(trip.fare), style: TS.h3.copyWith(fontSize: 16)),
+                  Text(trip.status == TripStatus.cancelled ? 'Le 0' : TR.le(trip.fare),
+                      style: TS.h3.copyWith(fontSize: 16)),
                   Text(trip.rideName, style: TS.small.copyWith(fontSize: 12)),
                   if (trip.rating != null)
                     Row(children: [
-                      const Icon(PhosphorIconsFill.star,
-                          color: TR.gold, size: 12),
-                      Text(' ${trip.rating}',
-                          style: TS.small.copyWith(fontSize: 12)),
+                      const Icon(PhosphorIconsFill.star, color: TR.gold, size: 12),
+                      Text(' ${trip.rating}', style: TS.small.copyWith(fontSize: 12)),
                     ]),
                 ],
               ),
@@ -138,6 +150,7 @@ class _TripCard extends StatelessWidget {
   }
 
   void _showReceipt(BuildContext context) {
+    final support = AppScope.read(context).config.supportPhone;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -149,39 +162,34 @@ class _TripCard extends StatelessWidget {
             const SheetHandle(),
             const SizedBox(height: 16),
             Row(children: [
-              const IconBubble(PhosphorIconsFill.receipt,
-                  color: TR.green, bg: TR.greenTint),
+              const IconBubble(PhosphorIconsFill.receipt, color: TR.green, bg: TR.greenTint),
               const SizedBox(width: 12),
-              Expanded(child: Text('Trip ${trip.id}', style: TS.h3)),
-              Text(TR.le(trip.fare), style: TS.h3.copyWith(color: TR.navy)),
+              Expanded(child: Text('Receipt', style: TS.h3)),
+              Text(trip.status == TripStatus.cancelled ? 'Le 0' : TR.le(trip.fare, decimals: true),
+                  style: TS.h3.copyWith(color: TR.navy)),
             ]),
             const SizedBox(height: 14),
-            Text('${trip.from} → ${trip.to}', style: TS.label),
-            Text('${trip.when} · ${trip.rideName}', style: TS.small),
+            Text('${trip.pickup.label} → ${trip.dropoff.label}', style: TS.label),
+            const SizedBox(height: 4),
+            Text(
+                '${dateLabel(trip.createdAt)} · ${trip.rideName} · ${trip.distanceKm.toStringAsFixed(1)} km',
+                style: TS.small),
+            if (trip.hasDriver)
+              Text('Driver: ${trip.driverName} · ${trip.driverPlate}', style: TS.small),
+            Text('Paid by ${trip.payment == 'wallet' ? 'TrustRide Wallet' : 'cash'}'
+                '${trip.tip > 0 ? ' · tip ${TR.le(trip.tip)}' : ''}',
+                style: TS.small),
+            Text('Trip ID: ${trip.id}', style: TS.small.copyWith(fontSize: 11)),
             const SizedBox(height: 18),
-            Row(children: [
-              Expanded(
-                child: TRButton(
-                    label: 'Get help',
-                    kind: BtnKind.outline,
-                    height: 50,
-                    onPressed: () {
-                      Navigator.pop(c);
-                      showToast(context, 'Support will reply within 1 hour',
-                          icon: PhosphorIconsFill.headset);
-                    }),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: TRButton(
-                    label: 'Email receipt',
-                    height: 50,
-                    onPressed: () {
-                      Navigator.pop(c);
-                      showToast(context, 'Receipt sent');
-                    }),
-              ),
-            ]),
+            TRButton(
+              label: support.isEmpty ? 'Support coming soon' : 'Call support',
+              kind: BtnKind.outline,
+              height: 50,
+              icon: PhosphorIconsFill.headset,
+              onPressed: support.isEmpty
+                  ? null
+                  : () => launchUrl(Uri(scheme: 'tel', path: support)),
+            ),
           ],
         ),
       ),

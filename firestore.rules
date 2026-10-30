@@ -1,0 +1,126 @@
+rules_version = '2';
+
+// TrustRide Firestore security rules.
+// Publish in Firebase console → Firestore Database → Rules, or with
+// `firebase deploy --only firestore:rules`.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function userDoc() { return get(/databases/$(database)/documents/users/$(uid())); }
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(uid()))
+        && userDoc().data.role == 'admin';
+    }
+    function isApprovedDriver() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/drivers/$(uid()))
+        && get(/databases/$(database)/documents/drivers/$(uid())).data.status == 'approved';
+    }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // Prices and business settings: everyone reads, admins edit.
+    match /config/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Rider profiles. Only admins can change role or add wallet credit.
+    // A rider may only lower their own balance (paying for rides/tips).
+    match /users/{userId} {
+      allow read: if signedIn() && (uid() == userId || isAdmin());
+      allow create: if signedIn() && uid() == userId
+        && request.resource.data.role == 'rider'
+        && request.resource.data.wallet == 0;
+      allow update: if isAdmin()
+        || (signedIn() && uid() == userId && !changed().hasAny(['role', 'wallet']))
+        || (signedIn() && uid() == userId && changed().hasOnly(['wallet'])
+            && request.resource.data.wallet < resource.data.wallet
+            && request.resource.data.wallet >= 0);
+      allow delete: if false;
+    }
+
+    // Wallet ledger. Riders may only record their own debits.
+    match /walletTx/{id} {
+      allow read: if signedIn() && (resource.data.uid == uid() || isAdmin());
+      allow create: if isAdmin()
+        || (signedIn() && request.resource.data.uid == uid() && request.resource.data.amount < 0);
+      allow update, delete: if false;
+    }
+
+    // Driver applications and live location.
+    match /drivers/{driverId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && uid() == driverId
+        && request.resource.data.status == 'pending'
+        && request.resource.data.ratingCount == 0;
+      allow update: if isAdmin()
+        // driver edits own details / online / location, not their status or rating
+        || (signedIn() && uid() == driverId
+            && !changed().hasAny(['status', 'rejectReason', 'ratingSum', 'ratingCount']))
+        // driver re-applies after a rejection
+        || (signedIn() && uid() == driverId && resource.data.status == 'rejected'
+            && request.resource.data.status == 'pending'
+            && !changed().hasAny(['ratingSum', 'ratingCount']))
+        // a rider adds one rating of 1–5 stars
+        || (signedIn() && changed().hasOnly(['ratingSum', 'ratingCount'])
+            && request.resource.data.ratingCount == resource.data.ratingCount + 1
+            && request.resource.data.ratingSum - resource.data.ratingSum >= 1
+            && request.resource.data.ratingSum - resource.data.ratingSum <= 5);
+      allow delete: if isAdmin();
+    }
+
+    // Trips.
+    match /trips/{tripId} {
+      allow read: if signedIn() && (
+        resource.data.riderId == uid()
+        || resource.data.driverId == uid()
+        || isAdmin()
+        || (resource.data.status == 'requested' && isApprovedDriver()));
+
+      allow create: if signedIn()
+        && request.resource.data.riderId == uid()
+        && request.resource.data.status == 'requested'
+        && request.resource.data.driverId == ''
+        && request.resource.data.paid == false;
+
+      allow update: if isAdmin()
+        // rider: cancel, pay, rate, tip, SOS — never fare or driver fields
+        || (signedIn() && resource.data.riderId == uid()
+            && changed().hasOnly(['status', 'cancelledBy', 'cancelledAt', 'paid', 'rating',
+                                   'tags', 'comment', 'tip', 'sos', 'updatedAt'])
+            && (request.resource.data.status == resource.data.status
+                || request.resource.data.status == 'cancelled'))
+        // approved driver accepts an open request
+        || (isApprovedDriver() && resource.data.status == 'requested'
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.driverId == uid()
+            && changed().hasOnly(['status', 'driverId', 'driverName', 'driverPhone', 'driverPlate',
+                                   'driverVehicle', 'driverRating', 'acceptedAt', 'updatedAt']))
+        // assigned driver moves the trip along or marks cash collected
+        || (signedIn() && resource.data.driverId == uid()
+            && changed().hasOnly(['status', 'arrivedAt', 'startedAt', 'completedAt', 'paid',
+                                   'cancelledBy', 'cancelledAt', 'updatedAt']));
+      allow delete: if false;
+    }
+
+    // Driver cash-out requests.
+    match /payouts/{id} {
+      allow read: if signedIn() && (resource.data.driverId == uid() || isAdmin());
+      allow create: if signedIn() && request.resource.data.driverId == uid()
+        && request.resource.data.status == 'requested'
+        && request.resource.data.amount > 0;
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Emergency alerts.
+    match /sos/{id} {
+      allow create: if signedIn() && request.resource.data.uid == uid();
+      allow read, update: if isAdmin();
+      allow delete: if false;
+    }
+  }
+}

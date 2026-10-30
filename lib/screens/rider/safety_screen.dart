@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import '../../core/icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_state.dart';
+import '../../core/icons.dart';
+import '../../core/models.dart';
 import '../../core/theme.dart';
+import '../../services/auth_service.dart';
+import '../../services/db.dart';
+import '../../services/location_service.dart';
 import '../../widgets/common.dart';
 
 class SafetyScreen extends StatefulWidget {
@@ -21,12 +26,22 @@ class _SafetyScreenState extends State<SafetyScreen>
       if (st == AnimationStatus.completed) _trigger();
     });
 
-  void _trigger() {
+  Future<void> _trigger() async {
     HapticFeedback.heavyImpact();
     _hold.reset();
-    showToast(context,
-        'SOS sent: TrustRide safety team and your trusted contacts have your live location',
-        icon: PhosphorIconsFill.siren);
+    final s = AppScope.read(context);
+    final p = s.profile;
+    if (p == null) return;
+    try {
+      final at = await LocationService.current();
+      await Db.raiseSos(user: p, tripId: s.currentTripId ?? '', at: at);
+      if (!mounted) return;
+      showToast(context, 'SOS sent to the TrustRide safety team',
+          icon: PhosphorIconsFill.siren);
+      await launchUrl(Uri(scheme: 'tel', path: s.config.policeNumber));
+    } catch (e) {
+      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
+    }
   }
 
   @override
@@ -35,7 +50,7 @@ class _SafetyScreenState extends State<SafetyScreen>
     super.dispose();
   }
 
-  Future<void> _addContact(AppState s) async {
+  Future<void> _addContact(String uid) async {
     final name = TextEditingController();
     final phone = TextEditingController();
     final ok = await showDialog<bool>(
@@ -46,12 +61,13 @@ class _SafetyScreenState extends State<SafetyScreen>
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           TextField(
               controller: name,
+              textCapitalization: TextCapitalization.words,
               decoration: const InputDecoration(hintText: 'Name')),
           const SizedBox(height: 10),
           TextField(
               controller: phone,
               keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(hintText: '+232 …')),
+              decoration: const InputDecoration(hintText: 'Phone, e.g. 77 000 000')),
         ]),
         actions: [
           TextButton(
@@ -63,16 +79,22 @@ class _SafetyScreenState extends State<SafetyScreen>
         ],
       ),
     );
-    if (ok == true && name.text.trim().isNotEmpty) {
-      s.addContact('${name.text.trim()} · ${phone.text.trim()}');
-    }
+    final n = name.text.trim(), ph = phone.text.trim();
     name.dispose();
     phone.dispose();
+    if (ok != true || n.isEmpty || ph.isEmpty) return;
+    try {
+      await Db.addContact(uid, Contact(n, AuthService.normalise(ph)));
+    } catch (e) {
+      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final s = AppScope.of(context);
+    final p = s.profile;
+    if (p == null) return const Scaffold(body: Loading());
     return Scaffold(
       body: SafeArea(
         child: ListView(
@@ -121,8 +143,7 @@ class _SafetyScreenState extends State<SafetyScreen>
                             backgroundColor: Colors.white.fade(0.2),
                           ),
                         ),
-                        Text('SOS',
-                            style: TS.h3.copyWith(color: Colors.white)),
+                        Text('SOS', style: TS.h3.copyWith(color: Colors.white)),
                       ]),
                     ),
                     const SizedBox(width: 16),
@@ -136,9 +157,8 @@ class _SafetyScreenState extends State<SafetyScreen>
                           Text(
                               _hold.value > 0
                                   ? 'Keep holding… ${(3 - 3 * _hold.value).ceil()}s'
-                                  : 'Press and hold for 3 seconds to alert police, your contacts and our safety team.',
-                              style: TS.small.copyWith(
-                                  color: const Color(0xFFFFE1E1))),
+                                  : 'Press and hold for 3 seconds. We alert our safety team with your location, then call ${s.config.policeNumber}.',
+                              style: TS.small.copyWith(color: const Color(0xFFFFE1E1))),
                         ],
                       ),
                     ),
@@ -148,30 +168,46 @@ class _SafetyScreenState extends State<SafetyScreen>
             ).animate().fadeIn().scale(begin: const Offset(0.96, 0.96)),
             const SizedBox(height: 12),
             Row(children: [
-              _call(PhosphorIconsFill.shieldStar, 'Police', '999'),
+              _call(PhosphorIconsFill.shieldStar, 'Police', s.config.policeNumber),
               const SizedBox(width: 10),
-              _call(PhosphorIconsFill.firstAid, 'Ambulance (NEMS)', '117'),
+              _call(PhosphorIconsFill.firstAid, 'Ambulance', s.config.ambulanceNumber),
             ]),
             const SizedBox(height: 22),
             const Caps('Trusted contacts'),
             const SizedBox(height: 10),
-            for (final c in s.trustedContacts)
+            if (p.contacts.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text('Add someone we can alert, and who you can share trips with.',
+                    style: TS.small),
+              ),
+            for (final c in p.contacts)
               Container(
                 margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
                 decoration: BoxDecoration(
-                    color: TR.surface,
-                    borderRadius: BorderRadius.circular(16)),
+                    color: TR.surface, borderRadius: BorderRadius.circular(16)),
                 child: Row(children: [
-                  Avatar(c.isNotEmpty ? c[0].toUpperCase() : '?', size: 40),
+                  Avatar(c.name.isNotEmpty ? c.name[0].toUpperCase() : '?', size: 40),
                   const SizedBox(width: 12),
-                  Expanded(child: Text(c, style: TS.label.copyWith(fontSize: 14))),
-                  const Icon(PhosphorIconsFill.checkCircle,
-                      color: TR.green, size: 20),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(c.name, style: TS.label.copyWith(fontSize: 14)),
+                        Text(c.phone, style: TS.small.copyWith(fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Remove',
+                    onPressed: () => Db.removeContact(p.uid, c),
+                    icon: const Icon(PhosphorIconsBold.x, size: 18, color: TR.muted),
+                  ),
                 ]),
               ),
             Pressable(
-              onTap: () => _addContact(s),
+              onTap: () => _addContact(p.uid),
               child: Container(
                 height: 50,
                 decoration: BoxDecoration(
@@ -181,11 +217,9 @@ class _SafetyScreenState extends State<SafetyScreen>
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(PhosphorIconsBold.userPlus,
-                        size: 18, color: TR.navy),
+                    const Icon(PhosphorIconsBold.userPlus, size: 18, color: TR.navy),
                     const SizedBox(width: 8),
-                    Text('Add trusted contact',
-                        style: TS.label.copyWith(color: TR.navy)),
+                    Text('Add trusted contact', style: TS.label.copyWith(color: TR.navy)),
                   ],
                 ),
               ),
@@ -193,12 +227,10 @@ class _SafetyScreenState extends State<SafetyScreen>
             const SizedBox(height: 22),
             const Caps('Ride settings'),
             const SizedBox(height: 10),
-            _toggle(s, 'pin', 'Require ride PIN',
-                'Driver must confirm your PIN to start', s.requirePin),
-            _toggle(s, 'night', 'Auto-share night trips',
-                'After 9 PM, contacts get your live trip', s.shareNightTrips),
-            _toggle(s, 'female', 'Female drivers preferred',
-                'When available nearby', s.preferFemaleDrivers),
+            _toggle(p.uid, 'requirePin', 'Require ride PIN',
+                'Driver must enter your PIN to start', p.requirePin),
+            _toggle(p.uid, 'shareNight', 'Remind me to share night trips',
+                'After 9 PM we prompt you to share your trip', p.shareNight),
           ],
         ),
       ),
@@ -207,8 +239,7 @@ class _SafetyScreenState extends State<SafetyScreen>
 
   Widget _call(IconData icon, String label, String number) => Expanded(
         child: Pressable(
-          onTap: () => showToast(context, 'Calling $label · $number',
-              icon: PhosphorIconsFill.phoneCall),
+          onTap: () => launchUrl(Uri(scheme: 'tel', path: number)),
           child: Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -235,14 +266,14 @@ class _SafetyScreenState extends State<SafetyScreen>
         ),
       );
 
-  Widget _toggle(AppState s, String key, String title, String sub, bool v) =>
+  Widget _toggle(String uid, String key, String title, String sub, bool v) =>
       Container(
         margin: const EdgeInsets.only(bottom: 8),
         decoration: BoxDecoration(
             color: TR.surface, borderRadius: BorderRadius.circular(16)),
         child: SwitchListTile(
           value: v,
-          onChanged: (_) => s.toggleSetting(key),
+          onChanged: (nv) => Db.setSetting(uid, key, nv),
           activeTrackColor: TR.green,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text(title, style: TS.label),

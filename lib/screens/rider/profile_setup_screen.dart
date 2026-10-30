@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import '../../core/icons.dart';
 
 import '../../core/app_state.dart';
+import '../../core/icons.dart';
+import '../../core/models.dart';
 import '../../core/routes.dart';
 import '../../core/theme.dart';
+import '../../services/auth_service.dart';
+import '../../services/db.dart';
 import '../../widgets/common.dart';
 
+/// First-time profile creation, and later "Personal info" editing.
 class ProfileSetupScreen extends StatefulWidget {
   const ProfileSetupScreen({super.key});
   @override
@@ -14,27 +18,85 @@ class ProfileSetupScreen extends StatefulWidget {
 }
 
 class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
-  final _name = TextEditingController(text: 'Aminata Kamara');
+  final _name = TextEditingController();
   final _email = TextEditingController();
-  final _contact = TextEditingController();
+  final _contactName = TextEditingController();
+  final _contactPhone = TextEditingController();
   String _lang = 'English';
-  bool _photo = false;
+  bool _saving = false;
+  bool _filled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _name.addListener(() {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_filled) return;
+    _filled = true;
+    final p = AppScope.read(context).profile;
+    if (p != null) {
+      _name.text = p.name;
+      _email.text = p.email;
+      _lang = p.language;
+    }
+  }
 
   @override
   void dispose() {
     _name.dispose();
     _email.dispose();
-    _contact.dispose();
+    _contactName.dispose();
+    _contactPhone.dispose();
     super.dispose();
   }
 
-  void _finish() {
+  Future<void> _save() async {
     final s = AppScope.read(context);
-    s.setProfile(_name.text, _lang);
-    if (_contact.text.trim().isNotEmpty) {
-      s.addContact('Emergency contact · +232 ${_contact.text.trim()}');
+    final user = s.authUser;
+    if (user == null) return;
+    if (_name.text.trim().length < 2) {
+      showToast(context, 'Please enter your name', icon: PhosphorIconsFill.warning);
+      return;
     }
-    Navigator.of(context).pushNamedAndRemoveUntil(R.rider, (r) => false);
+    final exists = s.profile != null;
+    final cPhone = _contactPhone.text.trim();
+    setState(() => _saving = true);
+    try {
+      await Db.createOrUpdateProfile(
+        uid: user.uid,
+        phone: user.phoneNumber ?? '',
+        name: _name.text.trim(),
+        email: _email.text.trim(),
+        language: _lang,
+        exists: exists,
+        emergency: cPhone.isEmpty
+            ? null
+            : Contact(
+                _contactName.text.trim().isEmpty
+                    ? 'Emergency contact'
+                    : _contactName.text.trim(),
+                AuthService.normalise(cPhone)),
+      );
+      if (!mounted) return;
+      if (exists) {
+        showToast(context, 'Profile saved');
+        Navigator.of(context).pop();
+      } else {
+        await s.waitForProfile();
+        if (!mounted) return;
+        Navigator.of(context).pushNamedAndRemoveUntil(R.rider, (_) => false);
+      }
+    } catch (e) {
+      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   Widget _field(String label, TextEditingController c,
@@ -47,10 +109,14 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         TextField(
           controller: c,
           keyboardType: type,
+          textCapitalization: type == null
+              ? TextCapitalization.words
+              : TextCapitalization.none,
           style: TS.label.copyWith(fontWeight: FontWeight.w600),
           decoration: InputDecoration(
             hintText: hint,
-            prefixIcon: icon == null ? null : Icon(icon, color: TR.muted, size: 20),
+            prefixIcon:
+                icon == null ? null : Icon(icon, color: TR.muted, size: 20),
           ),
         ),
       ],
@@ -59,32 +125,39 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final s = AppScope.of(context);
+    final editing = s.profile != null;
+    final initials = _name.text.trim().isEmpty
+        ? null
+        : _name.text
+            .trim()
+            .split(RegExp(r'\s+'))
+            .take(2)
+            .map((p) => p[0])
+            .join()
+            .toUpperCase();
+
     final items = <Widget>[
-      Text('Tell us about you', style: TS.h2),
+      if (editing) const Align(alignment: Alignment.centerLeft, child: TRBack()),
+      if (editing) const SizedBox(height: 16),
+      Text(editing ? 'Personal info' : 'Tell us about you', style: TS.h2),
       const SizedBox(height: 6),
-      Text('Drivers see your first name and photo when you book.',
-          style: TS.body),
+      Text('Drivers see your first name when you book.', style: TS.body),
       const SizedBox(height: 24),
       Row(children: [
-        Pressable(
-          onTap: () => setState(() => _photo = !_photo),
-          semanticLabel: 'Add photo',
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            width: 84,
-            height: 84,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: _photo ? TR.brandGradient : null,
-              color: _photo ? null : TR.greenTint,
-            ),
-            child: Center(
-              child: _photo
-                  ? Text('AK',
-                      style: TS.h2.copyWith(color: Colors.white))
-                  : const Icon(PhosphorIconsFill.camera,
-                      color: TR.green, size: 34),
-            ),
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          width: 76,
+          height: 76,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: initials != null ? TR.brandGradient : null,
+            color: initials != null ? null : TR.greenTint,
+          ),
+          child: Center(
+            child: initials != null
+                ? Text(initials, style: TS.h2.copyWith(color: Colors.white))
+                : const Icon(PhosphorIconsFill.user, color: TR.green, size: 32),
           ),
         ),
         const SizedBox(width: 16),
@@ -92,9 +165,8 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(_photo ? 'Looking good' : 'Add a profile photo',
-                  style: TS.label),
-              Text('Helps drivers find you at pickup', style: TS.small),
+              Text(s.authUser?.phoneNumber ?? '', style: TS.label),
+              Text('Verified phone number', style: TS.small),
             ],
           ),
         ),
@@ -107,8 +179,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           type: TextInputType.emailAddress,
           icon: PhosphorIconsRegular.envelope),
       const SizedBox(height: 16),
-      Text('App language',
-          style: TS.small.copyWith(fontWeight: FontWeight.w600)),
+      Text('App language', style: TS.small.copyWith(fontWeight: FontWeight.w600)),
       const SizedBox(height: 8),
       Row(
         children: ['English', 'Krio'].map((l) {
@@ -132,25 +203,35 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           );
         }).toList(),
       ),
-      const SizedBox(height: 16),
-      _field('Emergency contact', _contact,
+      const SizedBox(height: 22),
+      Text(editing ? 'Add a trusted contact' : 'Emergency contact (recommended)',
+          style: TS.label),
+      const SizedBox(height: 4),
+      Text('We alert them if you press SOS during a ride.', style: TS.small),
+      const SizedBox(height: 10),
+      _field('Their name', _contactName, icon: PhosphorIconsRegular.user),
+      const SizedBox(height: 12),
+      _field('Their phone', _contactPhone,
           hint: '77 000 000',
           type: TextInputType.phone,
-          icon: PhosphorIconsRegular.firstAid),
+          icon: PhosphorIconsRegular.phone),
       const SizedBox(height: 28),
-      TRButton(label: 'Finish setup', onPressed: _finish),
+      TRButton(
+          label: editing ? 'Save' : 'Finish setup',
+          loading: _saving,
+          onPressed: _save),
     ];
 
     return Scaffold(
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
           children: [
             for (var i = 0; i < items.length; i++)
               items[i]
                   .animate()
-                  .fadeIn(delay: (40 * i).ms, duration: 350.ms)
-                  .slideY(begin: 0.1, curve: Curves.easeOutCubic),
+                  .fadeIn(delay: (30 * i).ms, duration: 300.ms)
+                  .slideY(begin: 0.08, curve: Curves.easeOutCubic),
           ],
         ),
       ),

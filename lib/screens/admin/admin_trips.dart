@@ -1,41 +1,46 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import '../../core/icons.dart';
 
-import '../../core/data.dart';
+import '../../core/app_state.dart';
+import '../../core/icons.dart';
+import '../../core/models.dart';
 import '../../core/theme.dart';
+import '../../services/db.dart';
 import '../../widgets/common.dart';
 import 'admin_shell.dart';
 
-PillKind statusKind(String s) => switch (s) {
-      'Completed' => PillKind.success,
-      'En route' => PillKind.info,
-      'Pickup' => PillKind.warning,
-      'Cancelled' => PillKind.neutral,
-      _ => PillKind.danger,
-    };
+(String, PillKind) tripStatusPill(Trip t) {
+  if (t.sos && t.isActive) return ('SOS', PillKind.danger);
+  return switch (t.status) {
+    TripStatus.completed => (t.paid ? 'Completed' : 'Unpaid', t.paid ? PillKind.success : PillKind.warning),
+    TripStatus.cancelled => ('Cancelled', PillKind.neutral),
+    TripStatus.requested => ('Searching', PillKind.warning),
+    TripStatus.inProgress => ('On trip', PillKind.info),
+    _ => ('Pickup', PillKind.info),
+  };
+}
 
-/// Horizontally scrollable trips table used on Overview and Trips pages.
+/// Horizontally scrollable trips table.
 class TripTable extends StatelessWidget {
   const TripTable({super.key, required this.trips});
-  final List<AdminTrip> trips;
+  final List<Trip> trips;
 
   static const _cols = [
-    ('Trip', 100.0),
     ('Date', 120.0),
-    ('Rider', 120.0),
+    ('Rider', 140.0),
     ('Driver', 140.0),
-    ('Route', 230.0),
+    ('Route', 260.0),
     ('Type', 110.0),
-    ('Payment', 120.0),
+    ('Payment', 90.0),
     ('Fare', 80.0),
     ('Status', 110.0),
   ];
 
   @override
   Widget build(BuildContext context) {
-    Widget cell(int i, Widget child) =>
-        SizedBox(width: _cols[i].$2, child: child);
+    Widget cell(int i, Widget child) => SizedBox(width: _cols[i].$2, child: child);
+    final small = TS.small.copyWith(fontSize: 13);
+    final strong = TS.label.copyWith(fontSize: 13, fontWeight: FontWeight.w600);
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Column(
@@ -49,28 +54,89 @@ class TripTable extends StatelessWidget {
             ]),
           ),
           for (var r = 0; r < trips.length; r++)
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              decoration: const BoxDecoration(
-                  border: Border(top: BorderSide(color: Color(0xFFEEF1F5)))),
-              child: Row(children: [
-                cell(0, Text(trips[r].id, style: TS.label.copyWith(fontSize: 13))),
-                cell(1, Text(trips[r].date, style: TS.small.copyWith(fontSize: 13))),
-                cell(2, Text(trips[r].rider, style: TS.label.copyWith(fontSize: 13, fontWeight: FontWeight.w500))),
-                cell(3, Text(trips[r].driver, style: TS.label.copyWith(fontSize: 13, fontWeight: FontWeight.w500))),
-                cell(4, Text(trips[r].route, style: TS.small.copyWith(fontSize: 13))),
-                cell(5, Text(trips[r].type, style: TS.label.copyWith(fontSize: 13, fontWeight: FontWeight.w500))),
-                cell(6, Text(trips[r].pay, style: TS.small.copyWith(fontSize: 13))),
-                cell(7, Text(TR.le(trips[r].fare), style: TS.label.copyWith(fontSize: 13))),
-                cell(8, Align(
-                    alignment: Alignment.centerLeft,
-                    child: Pill(trips[r].status, kind: statusKind(trips[r].status)))),
-              ]),
-            ).animate().fadeIn(delay: (30 * r).ms),
+            Builder(builder: (context) {
+              final t = trips[r];
+              final st = tripStatusPill(t);
+              return InkWell(
+                onTap: () => showTripDetails(context, t),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: const BoxDecoration(
+                      border: Border(top: BorderSide(color: Color(0xFFEEF1F5)))),
+                  child: Row(children: [
+                    cell(0, Text(dateLabel(t.createdAt), style: small)),
+                    cell(1, Text(t.riderName, maxLines: 1, overflow: TextOverflow.ellipsis, style: strong)),
+                    cell(2, Text(t.hasDriver ? t.driverName : '—',
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: strong)),
+                    cell(3, Text('${t.pickup.label} → ${t.dropoff.label}',
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: small)),
+                    cell(4, Text(t.rideName, style: strong)),
+                    cell(5, Text(t.payment == 'wallet' ? 'Wallet' : 'Cash', style: small)),
+                    cell(6, Text(TR.le(t.fare), style: strong)),
+                    cell(7, Align(
+                        alignment: Alignment.centerLeft,
+                        child: Pill(st.$1, kind: st.$2))),
+                  ]),
+                ),
+              ).animate().fadeIn(delay: (20 * r.clamp(0, 15)).ms);
+            }),
         ],
       ),
     );
   }
+}
+
+void showTripDetails(BuildContext context, Trip t) {
+  showDialog(
+    context: context,
+    builder: (c) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      title: Text('Trip ${t.id}', style: TS.h3),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final row in [
+              ('Status', tripStatusPill(t).$1),
+              ('Requested', dateLabel(t.createdAt)),
+              ('Completed', t.completedAt == null ? '—' : dateLabel(t.completedAt)),
+              ('Rider', '${t.riderName} · ${t.riderPhone}'),
+              ('Driver', t.hasDriver ? '${t.driverName} · ${t.driverPhone} · ${t.driverPlate}' : '—'),
+              ('From', '${t.pickup.label}, ${t.pickup.address}'),
+              ('To', '${t.dropoff.label}, ${t.dropoff.address}'),
+              ('Ride', '${t.rideName} · ${t.distanceKm.toStringAsFixed(1)} km · ${t.durationMin.round()} min'),
+              ('Fare', '${TR.le(t.fare, decimals: true)} · ${t.payment} · ${t.paid ? 'paid' : 'not paid'}'),
+              ('Tip / rating', '${TR.le(t.tip)} · ${t.rating == null ? 'not rated' : '${t.rating}★'}'),
+              if (t.cancelledBy.isNotEmpty) ('Cancelled by', t.cancelledBy),
+            ])
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SizedBox(width: 100, child: Text(row.$1, style: TS.small)),
+                  Expanded(child: Text(row.$2, style: TS.label.copyWith(fontSize: 14))),
+                ]),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        if (t.isActive)
+          TextButton(
+            onPressed: () async {
+              await Db.cancelTrip(t.id, 'admin');
+              if (c.mounted) Navigator.pop(c);
+            },
+            child: Text('Cancel trip', style: TS.label.copyWith(color: TR.danger)),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(c),
+          child: Text('Close', style: TS.label.copyWith(color: TR.navy)),
+        ),
+      ],
+    ),
+  );
 }
 
 class AdminTrips extends StatefulWidget {
@@ -80,187 +146,217 @@ class AdminTrips extends StatefulWidget {
 }
 
 class _AdminTripsState extends State<AdminTrips> {
+  late final Stream<List<Trip>> _trips = Db.recentTrips(limit: 500);
+  late final Stream<List<Payout>> _payouts = Db.allPayouts();
   String _filter = 'All';
-  bool _released = false;
-  static const _filters = ['All', 'Completed', 'Cancelled', 'Disputed', 'Cash'];
+  String _q = '';
+  static const _filters = ['All', 'Active', 'Completed', 'Unpaid', 'Cancelled', 'Cash', 'Wallet', 'SOS'];
+
+  bool _match(Trip t) {
+    final ok = switch (_filter) {
+      'Active' => t.isActive,
+      'Completed' => t.status == TripStatus.completed,
+      'Unpaid' => t.status == TripStatus.completed && !t.paid,
+      'Cancelled' => t.status == TripStatus.cancelled,
+      'Cash' => t.payment == 'cash',
+      'Wallet' => t.payment == 'wallet',
+      'SOS' => t.sos,
+      _ => true,
+    };
+    if (!ok) return false;
+    if (_q.isEmpty) return true;
+    final q = _q.toLowerCase();
+    return t.id.toLowerCase().contains(q) ||
+        t.riderName.toLowerCase().contains(q) ||
+        t.riderPhone.contains(q) ||
+        t.driverName.toLowerCase().contains(q) ||
+        t.driverPhone.contains(q) ||
+        t.driverPlate.toLowerCase().contains(q);
+  }
+
+  Future<void> _payout(Payout p, String status) async {
+    if (status == 'paid') {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          title: Text('Mark ${TR.le(p.amount, decimals: true)} as paid?', style: TS.h3),
+          content: Text(
+              'Send the money to ${p.driverName} on ${p.provider} ${p.number} first, then confirm here.',
+              style: TS.body),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(c, false),
+                child: Text('Cancel', style: TS.label.copyWith(color: TR.muted))),
+            TextButton(
+                onPressed: () => Navigator.pop(c, true),
+                child: Text('I’ve paid', style: TS.label.copyWith(color: TR.green))),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    try {
+      await Db.setPayoutStatus(p.id, status);
+      if (mounted) showToast(context, status == 'paid' ? 'Payout marked paid' : 'Payout rejected');
+    } catch (e) {
+      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final rows = Mock.adminTrips.where((t) {
-      if (_filter == 'All') return true;
-      if (_filter == 'Cash') return t.pay == 'Cash';
-      return t.status == _filter;
-    }).toList();
-
-    final stats = [
-      ('Commission earned', 'Le 108,150', '15% on fares', PillKind.success),
-      ('Cash to reconcile', '1,906 trips', 'Le 41,300 owed by drivers', PillKind.warning),
-      ('Refunds & disputes', '23', '7 need action', PillKind.danger),
-    ];
-
+    final c = AppScope.of(context).config.commission;
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        AdminHeader(
-          title: 'Trips & payouts',
-          subtitle: 'Week of 24–30 October 2026',
-          actions: [
-            TRButton(
-              label: 'Download CSV',
-              icon: PhosphorIconsBold.downloadSimple,
-              expand: false,
-              height: 44,
-              onPressed: () => showToast(context, 'trips-week-44.csv exported'),
-            ),
-          ],
-        ),
+        const AdminHeader(title: 'Trips & payouts', subtitle: 'Latest 500 trips · live'),
         const SizedBox(height: 20),
-        LayoutBuilder(builder: (context, c) {
-          final cols = c.maxWidth > 1000 ? 4 : c.maxWidth > 600 ? 2 : 1;
-          final w = (c.maxWidth - (cols - 1) * 14) / cols - 0.5;
-          return Wrap(spacing: 14, runSpacing: 14, children: [
-            SizedBox(
-              width: w,
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: TR.brandGradient,
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Weekly driver payout batch',
-                        style: TS.small.copyWith(color: const Color(0xFFD6E2F0))),
-                    const SizedBox(height: 4),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text('Le 612,840.00',
-                          style: TS.h2.copyWith(color: Colors.white)),
-                    ),
-                    Text('982 drivers · Orange Money 71% · Afrimoney 29%',
-                        style: TS.small.copyWith(
-                            color: const Color(0xFFD6E2F0), fontSize: 12)),
-                    const SizedBox(height: 12),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 300),
-                      child: _released
-                          ? const Pill('Released · processing',
-                              key: ValueKey('r'),
-                              icon: PhosphorIconsFill.checkCircle)
-                          : TRButton(
-                              key: const ValueKey('b'),
-                              label: 'Review & release',
-                              kind: BtnKind.light,
-                              expand: false,
-                              height: 42,
-                              onPressed: () => _confirmRelease(context),
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            for (final st in stats)
-              SizedBox(
-                width: w,
-                child: AdminCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(st.$1, style: TS.small.copyWith(fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 4),
-                      Text(st.$2, style: TS.h2.copyWith(color: TR.navy)),
-                      const SizedBox(height: 6),
-                      Pill(st.$3, kind: st.$4),
-                    ],
-                  ),
-                ),
-              ),
-          ]);
-        }),
-        const SizedBox(height: 16),
-        AdminCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
+        StreamBuilder<List<Payout>>(
+          stream: _payouts,
+          builder: (context, snap) {
+            final pending = (snap.data ?? const <Payout>[])
+                .where((p) => p.status == 'requested')
+                .toList();
+            return AdminCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Text('All trips', style: TS.h3),
-                  ),
-                  for (final f in _filters)
-                    Pressable(
-                      onTap: () => setState(() => _filter = f),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: _filter == f ? TR.navy : Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                              color: _filter == f ? TR.navy : TR.border),
+                  Row(children: [
+                    Expanded(child: Text('Cash-out requests', style: TS.h3)),
+                    Pill('${pending.length} waiting',
+                        kind: pending.isEmpty ? PillKind.neutral : PillKind.warning),
+                  ]),
+                  const SizedBox(height: 10),
+                  if (pending.isEmpty)
+                    Text('No drivers are waiting for a payout.', style: TS.small)
+                  else
+                    for (final p in pending)
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: const BoxDecoration(
+                            border: Border(top: BorderSide(color: Color(0xFFEEF1F5)))),
+                        child: Wrap(
+                          spacing: 12,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          alignment: WrapAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${p.driverName} · ${TR.le(p.amount, decimals: true)}',
+                                    style: TS.label),
+                                Text('${p.provider} ${p.number} · ${timeAgo(p.createdAt)}',
+                                    style: TS.small.copyWith(fontSize: 12)),
+                              ],
+                            ),
+                            Wrap(spacing: 8, children: [
+                              TRButton(
+                                  label: 'Reject',
+                                  kind: BtnKind.outline,
+                                  expand: false,
+                                  height: 40,
+                                  onPressed: () => _payout(p, 'rejected')),
+                              TRButton(
+                                  label: 'Mark paid',
+                                  expand: false,
+                                  height: 40,
+                                  onPressed: () => _payout(p, 'paid')),
+                            ]),
+                          ],
                         ),
-                        child: Text(f,
-                            style: TS.label.copyWith(
-                                fontSize: 13,
-                                color: _filter == f ? Colors.white : TR.ink)),
                       ),
-                    ),
                 ],
               ),
-              const SizedBox(height: 8),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 250),
-                child: KeyedSubtree(
-                  key: ValueKey(_filter),
-                  child: rows.isEmpty
-                      ? Padding(
-                          padding: const EdgeInsets.all(30),
-                          child: Center(
-                              child: Text('No trips match this filter',
-                                  style: TS.small)),
-                        )
-                      : TripTable(trips: rows),
-                ),
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+        StreamBuilder<List<Trip>>(
+          stream: _trips,
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return EmptyState(
+                  icon: PhosphorIconsFill.warning,
+                  title: 'Couldn’t load trips',
+                  body: errorText(snap.error!));
+            }
+            if (!snap.hasData) return const Loading();
+            final all = snap.data!;
+            final rows = all.where(_match).toList();
+            final done = all.where((t) => t.status == TripStatus.completed);
+            final gross = done.fold<double>(0, (a, t) => a + t.fare);
+            final cashOwed = done
+                .where((t) => t.payment == 'cash')
+                .fold<double>(0, (a, t) => a + t.fare * c);
+            return AdminCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(spacing: 18, runSpacing: 8, children: [
+                    Text('Completed: ${done.length}', style: TS.label),
+                    Text('Bookings: ${TR.le(gross)}', style: TS.label),
+                    Text('Commission: ${TR.le(gross * c)}', style: TS.label),
+                    Text('Cash commission owed by drivers: ${TR.le(cashOwed)}', style: TS.label),
+                  ]),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: 320,
+                    height: 44,
+                    child: TextField(
+                      onChanged: (v) => setState(() => _q = v.trim()),
+                      decoration: InputDecoration(
+                        hintText: 'Search name, phone, plate or trip ID',
+                        prefixIcon: const Icon(PhosphorIconsRegular.magnifyingGlass, size: 18),
+                        contentPadding: EdgeInsets.zero,
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: TR.border)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final f in _filters)
+                        Pressable(
+                          onTap: () => setState(() => _filter = f),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: _filter == f ? TR.navy : Colors.white,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: _filter == f ? TR.navy : TR.border),
+                            ),
+                            child: Text(f,
+                                style: TS.label.copyWith(
+                                    fontSize: 13, color: _filter == f ? Colors.white : TR.ink)),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  if (rows.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(30),
+                      child: Center(child: Text('No trips match.', style: TS.small)),
+                    )
+                  else
+                    TripTable(trips: rows.take(200).toList()),
+                  const SizedBox(height: 8),
+                  Text('Showing ${rows.length > 200 ? 200 : rows.length} of ${rows.length} · tap a row for details',
+                      style: TS.small.copyWith(fontSize: 12)),
+                ],
               ),
-              const SizedBox(height: 8),
-              Text('Showing ${rows.length} of 9,412 trips',
-                  style: TS.small.copyWith(fontSize: 12)),
-            ],
-          ),
+            );
+          },
         ),
       ],
     );
-  }
-
-  Future<void> _confirmRelease(BuildContext context) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Text('Release Le 612,840 to 982 drivers?', style: TS.h3),
-        content: Text(
-            'Payouts go to each driver’s registered mobile money wallet. This cannot be undone.',
-            style: TS.body),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(c, false),
-              child: Text('Cancel', style: TS.label.copyWith(color: TR.muted))),
-          TextButton(
-              onPressed: () => Navigator.pop(c, true),
-              child: Text('Release', style: TS.label.copyWith(color: TR.green))),
-        ],
-      ),
-    );
-    if (ok == true && mounted) {
-      setState(() => _released = true);
-      if (context.mounted) showToast(context, 'Payout batch released');
-    }
   }
 }

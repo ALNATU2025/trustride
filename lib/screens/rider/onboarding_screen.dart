@@ -19,12 +19,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   static const _titles = [
     'Rides across Freetown in a few taps',
-    'Pay the way you already pay',
+    'Know the price before you go',
     'Your journey, our trust',
   ];
   static const _bodies = [
     'From Lumley to Kissy, pick a car, keke or okada and see the fare before you book. No haggling.',
-    'Orange Money, Afrimoney, TrustRide Wallet or cash. Fares are shown upfront in Leones.',
+    'Your fare is calculated from the real route and shown in Leones before you book. Pay cash or with your TrustRide Wallet.',
     'Every driver is verified before their first trip, and every ride is tracked from pickup to drop-off.',
   ];
 
@@ -124,7 +124,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         padding: const EdgeInsets.only(top: 12),
                         child: TextButton.icon(
                           onPressed: () => Navigator.of(context)
-                              .pushNamed(R.driverSignup),
+                              .pushReplacementNamed(R.signIn),
                           icon: const Icon(PhosphorIconsBold.steeringWheel,
                               size: 18, color: TR.navy),
                           label: Text('I want to drive with TrustRide',
@@ -199,12 +199,12 @@ class _ArtRide extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Lumley Beach', style: TS.label),
-                        Text('4.2 km · 18 min', style: TS.small),
+                        Text('Your destination', style: TS.label),
+                        Text('Route, time and fare up front', style: TS.small),
                       ],
                     ),
                   ),
-                  Text('Le 85', style: TS.h3.copyWith(color: TR.navy)),
+                  const Icon(PhosphorIconsFill.checkCircle, color: TR.green),
                 ]),
               ).animate().slideY(begin: 1, delay: 500.ms, curve: Curves.easeOutBack),
             ),
@@ -218,9 +218,8 @@ class _ArtPay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final rows = [
-      ('Orange Money', TR.orangeMoney, true),
-      ('Afrimoney', TR.afrimoney, false),
-      ('Cash to driver', TR.green, false),
+      ('Cash to driver', TR.green, true),
+      ('TrustRide Wallet', TR.navy, false),
     ];
     return Container(
       decoration: BoxDecoration(
@@ -245,7 +244,7 @@ class _ArtPay extends StatelessWidget {
           children: [
             const Caps('Trip fare'),
             const SizedBox(height: 4),
-            Text('Le 85.00', style: TS.h1.copyWith(color: TR.navy)),
+            Text('Upfront', style: TS.h1.copyWith(color: TR.navy)),
             const SizedBox(height: 12),
             for (var i = 0; i < rows.length; i++)
               Container(

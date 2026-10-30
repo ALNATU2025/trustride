@@ -506,3 +506,83 @@ void showToast(BuildContext context, String message, {IconData? icon}) {
       ]),
     ));
 }
+
+/// Icon for a ride type id (okada, keke, car, ac, xl).
+IconData rideIcon(String id) => switch (id) {
+      'okada' => PhosphorIconsFill.motorcycle,
+      'keke' => PhosphorIconsFill.scooter,
+      'ac' => PhosphorIconsFill.snowflake,
+      'xl' => PhosphorIconsFill.van,
+      _ => PhosphorIconsFill.carProfile,
+    };
+
+/// Friendly message for any error thrown by services.
+String errorText(Object e) {
+  final s = e.toString();
+  if (s.contains('permission-denied')) {
+    return 'You don’t have permission to do that.';
+  }
+  if (s.contains('unavailable') || s.contains('network')) {
+    return 'No connection. Check your internet and try again.';
+  }
+  return s.replaceFirst('Exception: ', '').replaceFirst(RegExp(r'^\[.*?\]\s*'), '');
+}
+
+String timeAgo(DateTime? t) {
+  if (t == null) return 'just now';
+  final d = DateTime.now().difference(t);
+  if (d.inMinutes < 1) return 'just now';
+  if (d.inMinutes < 60) return '${d.inMinutes} min ago';
+  if (d.inHours < 24) return '${d.inHours} h ago';
+  return '${d.inDays} d ago';
+}
+
+String dateLabel(DateTime? t) {
+  if (t == null) return 'Pending';
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final now = DateTime.now();
+  final hm = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  if (t.year == now.year && t.month == now.month && t.day == now.day) {
+    return 'Today, $hm';
+  }
+  final y = now.subtract(const Duration(days: 1));
+  if (t.year == y.year && t.month == y.month && t.day == y.day) {
+    return 'Yesterday, $hm';
+  }
+  return '${t.day} ${months[t.month - 1]}, $hm';
+}
+
+/// Empty / loading / error placeholder used in lists.
+class EmptyState extends StatelessWidget {
+  const EmptyState({super.key, required this.icon, required this.title, this.body = ''});
+  final IconData icon;
+  final String title;
+  final String body;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconBubble(icon, size: 64, color: TR.green, bg: TR.greenTint),
+            const SizedBox(height: 12),
+            Text(title, style: TS.h3, textAlign: TextAlign.center),
+            if (body.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(body, style: TS.small, textAlign: TextAlign.center),
+            ],
+          ],
+        ),
+      );
+}
+
+class Loading extends StatelessWidget {
+  const Loading({super.key});
+  @override
+  Widget build(BuildContext context) => const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: CircularProgressIndicator(color: TR.green),
+        ),
+      );
+}

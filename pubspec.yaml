@@ -4,11 +4,23 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.3.0 <4.0.0'
+  sdk: '>=3.5.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
+  # Backend
+  firebase_core: ^4.0.0
+  firebase_auth: ^6.0.0
+  cloud_firestore: ^6.0.0
+  # Maps, location and routing (OpenStreetMap — no API key)
+  flutter_map: ^8.1.0
+  latlong2: ^0.9.1
+  geolocator: ^14.0.0
+  http: ^1.2.2
+  # Calls, SMS and navigation hand-off
+  url_launcher: ^6.3.0
+  # Look and feel
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.0
 

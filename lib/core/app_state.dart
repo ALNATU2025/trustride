@@ -1,46 +1,148 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 
-import 'data.dart';
+import '../services/auth_service.dart';
+import '../services/db.dart';
+import '../services/geo_service.dart';
+import '../services/location_service.dart';
+import 'models.dart';
 
-/// Single source of truth for the demo app. Swap the methods for real API
-/// calls (auth, pricing, dispatch, payments) when wiring up a backend.
+/// Live app state: who is signed in, their profile and driver record, the
+/// admin-managed config, and the ride being booked.
 class AppState extends ChangeNotifier {
-  // ---------- Rider ----------
-  String riderName = 'Aminata Kamara';
-  String phone = '76 123 456';
-  String language = 'English';
-  String pickup = 'Current location · Congo Cross';
-  Place destination = Mock.places.first;
+  AppConfig config = AppConfig.defaults;
+  User? authUser;
+  AppUser? profile;
+  DriverProfile? driver;
+  bool profileLoaded = false;
+
+  final _ready = Completer<void>();
+  Future<void> get ready => _ready.future;
+
+  StreamSubscription<User?>? _authSub;
+  StreamSubscription<AppUser?>? _userSub;
+  StreamSubscription<DriverProfile?>? _driverSub;
+  StreamSubscription<AppConfig>? _configSub;
+
+  void start() {
+    _configSub = Db.configStream().listen((c) {
+      config = c;
+      if (!config.enabledRides.any((r) => r.id == rideId) &&
+          config.enabledRides.isNotEmpty) {
+        rideId = config.enabledRides.first.id;
+      }
+      notifyListeners();
+    });
+    _authSub = AuthService.changes().listen(_onAuth, onError: (_) {
+      _completeReady();
+    });
+  }
+
+  void _completeReady() {
+    if (!_ready.isCompleted) _ready.complete();
+  }
+
+  void _onAuth(User? u) {
+    final changed = u?.uid != authUser?.uid;
+    authUser = u;
+    if (!changed && u != null) return;
+    _userSub?.cancel();
+    _driverSub?.cancel();
+    profile = null;
+    driver = null;
+    profileLoaded = false;
+    currentTripId = null;
+    if (u == null) {
+      _completeReady();
+      notifyListeners();
+      return;
+    }
+    _userSub = Db.userStream(u.uid).listen((p) {
+      profile = p;
+      profileLoaded = true;
+      _completeReady();
+      notifyListeners();
+    }, onError: (_) {
+      profileLoaded = true;
+      _completeReady();
+      notifyListeners();
+    });
+    _driverSub = Db.driverStream(u.uid).listen((d) {
+      driver = d;
+      notifyListeners();
+    }, onError: (_) {});
+  }
+
+  /// Waits until the signed-in user's profile has been read (or 15 s).
+  Future<void> waitForProfile() async {
+    if (authUser != null && profileLoaded) return;
+    final c = Completer<void>();
+    void check() {
+      if (authUser != null && profileLoaded && !c.isCompleted) c.complete();
+    }
+
+    addListener(check);
+    try {
+      await c.future.timeout(const Duration(seconds: 15));
+    } catch (_) {
+    } finally {
+      removeListener(check);
+    }
+  }
+
+  Future<void> signOut() async {
+    final d = driver;
+    if (d != null && d.online) {
+      try {
+        await Db.setOnline(d.uid, false);
+      } catch (_) {}
+    }
+    await AuthService.signOut();
+  }
+
+  // ---------------- booking ----------------
+  LatLng? myLocation;
+  String? locationError;
+  Place? pickup;
+  Place? dropoff;
+  RouteInfo? route;
   String rideId = 'car';
-  String paymentId = 'om';
-  double wallet = 240;
-  int tip = 10;
-  final List<Trip> trips = Mock.seedTrips();
-  final List<String> trustedContacts = ['Fatmata Kamara · +232 77 555 210'];
-  bool requirePin = true;
-  bool shareNightTrips = true;
-  bool preferFemaleDrivers = false;
+  String payment = 'cash';
+  String? currentTripId;
 
-  String get firstName => riderName.split(' ').first;
-  RideType get ride => Mock.rides.firstWhere((r) => r.id == rideId);
-  PayMethod get payment =>
-      Mock.payMethods.firstWhere((p) => p.id == paymentId);
-  double get fare => ride.fareFor(destination.km);
-  int get tripMinutes => (destination.km * 4.3).round().clamp(4, 90).toInt();
+  RideType get ride => config.ride(rideId);
+  double fareFor(RideType r) =>
+      route == null ? 0 : r.fareFor(route!.distanceKm, route!.durationMin);
+  double get fare => fareFor(ride);
 
-  void setProfile(String name, String lang) {
-    if (name.trim().isNotEmpty) riderName = name.trim();
-    language = lang;
+  Future<void> locate({bool resetPickup = false}) async {
+    locationError = await LocationService.ensurePermission();
+    final p = await LocationService.current();
+    if (p != null) myLocation = p;
+    notifyListeners();
+    if (p != null && (pickup == null || resetPickup)) {
+      final place = await GeoService.reverse(p);
+      pickup = Place(
+          label: 'Current location · ${place.label}',
+          address: place.address,
+          lat: place.lat,
+          lng: place.lng);
+      notifyListeners();
+    }
+  }
+
+  void setPickup(Place p) {
+    pickup = p;
+    route = null;
     notifyListeners();
   }
 
-  void setPhone(String value) {
-    phone = value;
-    notifyListeners();
-  }
-
-  void setDestination(Place p) {
-    destination = p;
+  void setDropoff(Place p) {
+    dropoff = p;
+    route = null;
     notifyListeners();
   }
 
@@ -49,149 +151,63 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setPayment(String id) {
-    paymentId = id;
+  void setPayment(String p) {
+    payment = p;
     notifyListeners();
   }
 
-  void setTip(int value) {
-    tip = value;
+  Future<void> loadRoute() async {
+    final a = pickup, b = dropoff;
+    if (a == null || b == null) return;
+    route = await GeoService.route(a.latLng, b.latLng);
     notifyListeners();
   }
 
-  void topUp(double amount) {
-    wallet += amount;
-    notifyListeners();
-  }
-
-  /// Returns false when the wallet cannot cover the fare.
-  bool pay() {
-    if (paymentId == 'wallet') {
-      if (wallet < fare) return false;
-      wallet -= fare;
+  Future<String> book() async {
+    final p = profile, a = pickup, b = dropoff, r = route;
+    if (p == null || a == null || b == null || r == null) {
+      throw 'Choose a pickup and destination first.';
     }
-    notifyListeners();
-    return true;
-  }
-
-  void finishTrip(int rating) {
-    trips.insert(
-      0,
-      Trip(
-        id: 'TR-${20940 + trips.length}',
-        when: 'Today, ${TimeOfDay.now().hour.toString().padLeft(2, '0')}:${TimeOfDay.now().minute.toString().padLeft(2, '0')}',
-        from: 'Congo Cross',
-        to: destination.name,
-        fare: fare + tip,
-        rideName: ride.name,
-        status: TripStatus.completed,
-        rating: rating,
-      ),
-    );
-    if (paymentId == 'wallet' && tip > 0 && wallet >= tip) wallet -= tip;
-    notifyListeners();
-  }
-
-  void cancelTrip() {
-    trips.insert(
-      0,
-      Trip(
-        id: 'TR-${20940 + trips.length}',
-        when: 'Today',
-        from: 'Congo Cross',
-        to: destination.name,
-        fare: 0,
-        rideName: ride.name,
-        status: TripStatus.cancelled,
-      ),
-    );
-    notifyListeners();
-  }
-
-  void addContact(String c) {
-    trustedContacts.add(c);
-    notifyListeners();
-  }
-
-  void toggleSetting(String key) {
-    switch (key) {
-      case 'pin':
-        requirePin = !requirePin;
-      case 'night':
-        shareNightTrips = !shareNightTrips;
-      case 'female':
-        preferFemaleDrivers = !preferFemaleDrivers;
+    if (payment == 'wallet' && p.wallet < fare) {
+      throw 'Your wallet balance is too low for this ride.';
     }
+    final id = await Db.requestTrip(
+      rider: p,
+      ride: ride,
+      pickup: a,
+      dropoff: b,
+      route: r,
+      fare: fare,
+      payment: payment,
+    );
+    currentTripId = id;
+    notifyListeners();
+    return id;
+  }
+
+  void setCurrentTrip(String? id) {
+    currentTripId = id;
     notifyListeners();
   }
 
-  // ---------- Driver ----------
-  bool driverOnline = false;
-  double driverToday = 640;
-  int driverTripsToday = 9;
-  double driverAvailable = 1215.5;
-  final List<double> driverWeek = [480, 260, 410, 455, 330, 360, 640];
-  final Map<String, String> driverDocs = {
-    'National ID card (NIN)': 'approved',
-    'Driver’s licence (SLRSA)': 'approved',
-    'Profile photo': 'approved',
-    'Vehicle licence / registration': 'review',
-    'Insurance certificate': 'upload',
-    'Police clearance': 'upload',
-  };
-  String driverVehicle = 'Car';
-
-  int get docsDone =>
-      driverDocs.values.where((s) => s != 'upload').length;
-
-  void uploadDoc(String name) {
-    driverDocs[name] = 'review';
+  void finishBooking() {
+    currentTripId = null;
+    dropoff = null;
+    route = null;
     notifyListeners();
   }
 
-  void setDriverVehicle(String v) {
-    driverVehicle = v;
-    notifyListeners();
-  }
-
-  void toggleOnline() {
-    driverOnline = !driverOnline;
-    notifyListeners();
-  }
-
-  void acceptRide(double fare) {
-    final net = fare * 0.85;
-    driverToday += net;
-    driverAvailable += net;
-    driverTripsToday += 1;
-    driverWeek[driverWeek.length - 1] = driverToday;
-    notifyListeners();
-  }
-
-  void cashOut() {
-    driverAvailable = 0;
-    notifyListeners();
-  }
-
-  // ---------- Admin ----------
-  final List<Applicant> applicants = Mock.seedApplicants();
-  int sosAlerts = 1;
-
-  int get pendingCount =>
-      applicants.where((a) => a.status == 'pending').length;
-
-  void review(Applicant a, String status) {
-    a.status = status;
-    notifyListeners();
-  }
-
-  void resolveSos() {
-    sosAlerts = 0;
-    notifyListeners();
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    _userSub?.cancel();
+    _driverSub?.cancel();
+    _configSub?.cancel();
+    super.dispose();
   }
 }
 
-/// Makes [AppState] available to the whole widget tree without extra packages.
+/// Makes [AppState] available to the whole widget tree.
 class AppScope extends InheritedNotifier<AppState> {
   const AppScope({super.key, required AppState state, required super.child})
       : super(notifier: state);
@@ -199,7 +215,6 @@ class AppScope extends InheritedNotifier<AppState> {
   static AppState of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<AppScope>()!.notifier!;
 
-  /// Read without subscribing to rebuilds (for callbacks).
   static AppState read(BuildContext context) =>
       context.getInheritedWidgetOfExactType<AppScope>()!.notifier!;
 }

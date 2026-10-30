@@ -4,14 +4,11 @@ import '../screens/admin/admin_shell.dart';
 import '../screens/driver/driver_shell.dart';
 import '../screens/driver/driver_signup_screen.dart';
 import '../screens/rider/choose_ride_screen.dart';
-import '../screens/rider/driver_arriving_screen.dart';
-import '../screens/rider/finding_screen.dart';
-import '../screens/rider/on_trip_screen.dart';
 import '../screens/rider/onboarding_screen.dart';
 import '../screens/rider/otp_screen.dart';
-import '../screens/rider/payment_screen.dart';
 import '../screens/rider/profile_setup_screen.dart';
 import '../screens/rider/rate_screen.dart';
+import '../screens/rider/ride_screen.dart';
 import '../screens/rider/rider_shell.dart';
 import '../screens/rider/safety_screen.dart';
 import '../screens/rider/search_screen.dart';
@@ -25,33 +22,28 @@ class R {
   static const otp = '/otp';
   static const profileSetup = '/profile-setup';
   static const rider = '/rider';
-  static const search = '/search';
+  static const search = '/search'; // argument: 'pickup' | 'dropoff' | 'home' | 'work'
   static const chooseRide = '/choose-ride';
-  static const finding = '/finding';
-  static const arriving = '/arriving';
-  static const onTrip = '/on-trip';
-  static const payment = '/payment';
-  static const rate = '/rate';
+  static const ride = '/ride'; // live trip: finding → arriving → on trip → pay
+  static const rate = '/rate'; // argument: Trip
   static const safety = '/safety';
   static const driverSignup = '/driver-signup';
   static const driver = '/driver';
   static const admin = '/admin';
 
   static Route<dynamic> generate(RouteSettings settings) {
+    final args = settings.arguments;
     final Widget page = switch (settings.name) {
       splash => const SplashScreen(),
       onboarding => const OnboardingScreen(),
       signIn => const SignInScreen(),
-      otp => const OtpScreen(),
+      otp => OtpScreen(phone: args is String ? args : ''),
       profileSetup => const ProfileSetupScreen(),
-      rider => RiderShell(initialTab: (settings.arguments as int?) ?? 0),
-      search => const SearchScreen(),
+      rider => RiderShell(initialTab: args is int ? args : 0),
+      search => SearchScreen(mode: args is String ? args : 'dropoff'),
       chooseRide => const ChooseRideScreen(),
-      finding => const FindingScreen(),
-      arriving => const DriverArrivingScreen(),
-      onTrip => const OnTripScreen(),
-      payment => const PaymentScreen(),
-      rate => const RateScreen(),
+      ride => const RideScreen(),
+      rate => RateScreen(tripId: args is String ? args : ''),
       safety => const SafetyScreen(),
       driverSignup => const DriverSignupScreen(),
       driver => const DriverShell(),

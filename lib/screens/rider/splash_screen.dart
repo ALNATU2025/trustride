@@ -1,9 +1,8 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
-import '../../core/routes.dart';
+import '../../core/app_state.dart';
+import '../../core/launch.dart';
 import '../../core/theme.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -13,30 +12,33 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
-  Timer? _timer;
+  bool _left = false;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer(const Duration(milliseconds: 2800), _go);
+    _start();
+  }
+
+  Future<void> _start() async {
+    final s = AppScope.read(context);
+    await Future.wait([
+      Future.delayed(const Duration(milliseconds: 1600)),
+      s.ready.timeout(const Duration(seconds: 12), onTimeout: () {}),
+    ]);
+    _go();
   }
 
   void _go() {
-    _timer?.cancel();
-    if (mounted) Navigator.of(context).pushReplacementNamed(R.onboarding);
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
+    if (_left || !mounted) return;
+    _left = true;
+    goHome(context);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: GestureDetector(
-        onTap: _go,
         behavior: HitTestBehavior.opaque,
         child: Stack(
           children: [

@@ -1,13 +1,18 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../core/icons.dart';
 
 import '../../core/app_state.dart';
+import '../../core/models.dart';
+import '../../services/db.dart';
 import '../../core/routes.dart';
 import '../../core/theme.dart';
 import '../../widgets/common.dart';
 import 'admin_drivers.dart';
 import 'admin_overview.dart';
 import 'admin_trips.dart';
+import 'admin_wallet.dart';
+import 'admin_settings.dart';
 
 class AdminShell extends StatefulWidget {
   const AdminShell({super.key});
@@ -18,6 +23,8 @@ class AdminShell extends StatefulWidget {
 class _AdminShellState extends State<AdminShell> {
   int _index = 0;
   final _scaffold = GlobalKey<ScaffoldState>();
+  late final Stream<List<DriverProfile>> _pending = Db.driversByStatus('pending');
+  late final Stream<List<SosAlert>> _sos = Db.openSos();
 
   void _go(int i) {
     setState(() => _index = i);
@@ -28,6 +35,30 @@ class _AdminShellState extends State<AdminShell> {
 
   @override
   Widget build(BuildContext context) {
+    final s = AppScope.of(context);
+    final p = s.profile;
+    if (p == null || !p.isAdmin) {
+      return Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const EmptyState(
+                icon: PhosphorIconsFill.lockSimple,
+                title: 'Admins only',
+                body: 'Ask a TrustRide owner to give your account the admin role.',
+              ),
+              TRButton(
+                label: s.authUser == null ? 'Sign in' : 'Back',
+                expand: false,
+                onPressed: () => s.authUser == null
+                    ? Navigator.of(context).pushNamedAndRemoveUntil(R.signIn, (_) => false)
+                    : Navigator.of(context).maybePop(),
+              ),
+            ]),
+          ),
+        ),
+      );
+    }
     final wide = MediaQuery.of(context).size.width >= 920;
     final page = AnimatedSwitcher(
       duration: const Duration(milliseconds: 300),
@@ -44,12 +75,25 @@ class _AdminShellState extends State<AdminShell> {
         child: switch (_index) {
           0 => AdminOverview(onOpen: _go),
           1 => const AdminDrivers(),
-          _ => const AdminTrips(),
+          2 => const AdminTrips(),
+          3 => const AdminWallet(),
+          _ => const AdminSettings(),
         },
       ),
     );
 
-    final sidebar = _Sidebar(index: _index, onTap: _go);
+    final sidebar = StreamBuilder<List<DriverProfile>>(
+      stream: _pending,
+      builder: (context, pend) => StreamBuilder<List<SosAlert>>(
+        stream: _sos,
+        builder: (context, sos) => _Sidebar(
+          index: _index,
+          onTap: _go,
+          pending: pend.data?.length ?? 0,
+          sos: sos.data?.length ?? 0,
+        ),
+      ),
+    );
 
     return Scaffold(
       key: _scaffold,
@@ -61,13 +105,6 @@ class _AdminShellState extends State<AdminShell> {
               backgroundColor: TR.navy,
               foregroundColor: Colors.white,
               title: const BrandWord(light: true, size: 18),
-              actions: [
-                IconButton(
-                  tooltip: 'Exit admin',
-                  onPressed: () => Navigator.of(context).maybePop(),
-                  icon: const Icon(PhosphorIconsBold.signOut),
-                ),
-              ],
             ),
       body: wide
           ? Row(children: [
@@ -80,25 +117,26 @@ class _AdminShellState extends State<AdminShell> {
 }
 
 class _Sidebar extends StatelessWidget {
-  const _Sidebar({required this.index, required this.onTap});
+  const _Sidebar({
+    required this.index,
+    required this.onTap,
+    required this.pending,
+    required this.sos,
+  });
   final int index;
   final ValueChanged<int> onTap;
+  final int pending;
+  final int sos;
 
   @override
   Widget build(BuildContext context) {
-    final s = AppScope.of(context);
+    final s = AppScope.read(context);
     final items = [
-      (PhosphorIconsFill.squaresFour, 'Overview', 0, 0),
-      (PhosphorIconsFill.identificationCard, 'Driver verification', 1,
-          s.pendingCount),
-      (PhosphorIconsFill.receipt, 'Trips & payouts', 2, 0),
-    ];
-    final soon = [
-      (PhosphorIconsFill.users, 'Riders'),
-      (PhosphorIconsFill.siren, 'Safety & SOS'),
-      (PhosphorIconsFill.mapTrifold, 'Pricing & zones'),
-      (PhosphorIconsFill.ticket, 'Promotions'),
-      (PhosphorIconsFill.gear, 'Settings'),
+      (PhosphorIconsFill.squaresFour, 'Overview', 0, sos, true),
+      (PhosphorIconsFill.identificationCard, 'Driver verification', 1, pending, false),
+      (PhosphorIconsFill.receipt, 'Trips & payouts', 2, 0, false),
+      (PhosphorIconsFill.wallet, 'Wallet top-ups', 3, 0, false),
+      (PhosphorIconsFill.gear, 'Prices & settings', 4, 0, false),
     ];
     return Container(
       color: TR.navy,
@@ -132,17 +170,19 @@ class _Sidebar extends StatelessWidget {
               const SizedBox(height: 26),
               for (final it in items)
                 _tile(it.$1, it.$2, it.$3 == index, () => onTap(it.$3),
-                    badge: it.$4),
-              const SizedBox(height: 10),
-              for (final it in soon)
-                _tile(it.$1, it.$2, false,
-                    () => showToast(context, '${it.$2} is coming soon'),
-                    badge: it.$2.startsWith('Safety') ? s.sosAlerts : 0,
-                    danger: true),
+                    badge: it.$4, danger: it.$5),
               const Spacer(),
-              _tile(PhosphorIconsFill.signOut, 'Exit to app', false,
-                  () => Navigator.of(context)
-                      .pushNamedAndRemoveUntil(R.rider, (r) => false)),
+              if (!kIsWeb)
+                _tile(PhosphorIconsFill.userSwitch, 'Back to app', false,
+                    () => Navigator.of(context)
+                        .pushNamedAndRemoveUntil(R.rider, (r) => false)),
+              _tile(PhosphorIconsFill.signOut, 'Log out', false, () async {
+                await s.signOut();
+                if (context.mounted) {
+                  Navigator.of(context)
+                      .pushNamedAndRemoveUntil(R.signIn, (r) => false);
+                }
+              }),
             ],
           ),
         ),

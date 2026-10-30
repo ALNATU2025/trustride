@@ -1,73 +1,81 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import '../../core/icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_state.dart';
-import '../../core/data.dart';
+import '../../core/icons.dart';
+import '../../core/models.dart';
 import '../../core/theme.dart';
+import '../../services/db.dart';
 import '../../widgets/common.dart';
 
-class WalletTab extends StatelessWidget {
+class WalletTab extends StatefulWidget {
   const WalletTab({super.key});
+  @override
+  State<WalletTab> createState() => _WalletTabState();
+}
 
-  void _topUp(BuildContext context) {
-    final s = AppScope.read(context);
-    var amount = 100;
-    var method = 'om';
+class _WalletTabState extends State<WalletTab> {
+  Stream<List<WalletTx>>? _tx;
+  String? _uid;
+
+  void _howToTopUp(AppState s) {
+    final phone = s.profile?.phone ?? '';
+    final support = s.config.supportPhone;
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (c) => StatefulBuilder(
-        builder: (c, set) => BottomPanel(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SheetHandle(),
-              const SizedBox(height: 16),
-              Text('Top up wallet', style: TS.h3),
-              const SizedBox(height: 14),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                for (final a in [50, 100, 200, 500])
-                  SelectTile(
-                    selected: amount == a,
-                    radius: 14,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                    onTap: () => set(() => amount = a),
-                    child: Text('Le $a', style: TS.label),
-                  ),
-              ]),
-              const SizedBox(height: 16),
-              const Caps('From'),
-              const SizedBox(height: 8),
-              for (final m in Mock.payMethods.take(2))
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: SelectTile(
-                    selected: method == m.id,
-                    onTap: () => set(() => method = m.id),
-                    child: Row(children: [
-                      PayDot(m.color, m.icon, size: 34),
-                      const SizedBox(width: 12),
-                      Expanded(child: Text(m.name, style: TS.label)),
-                      Text(m.detail, style: TS.small),
-                    ]),
+      builder: (c) => BottomPanel(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SheetHandle(),
+            const SizedBox(height: 16),
+            Text('Top up your wallet', style: TS.h3),
+            const SizedBox(height: 10),
+            Text(
+                'Pay a TrustRide agent or our office in cash, and give them your account number below. The credit appears here straight away.',
+                style: TS.body),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                  color: TR.field, borderRadius: BorderRadius.circular(14)),
+              child: Row(children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Your account number', style: TS.small),
+                      Text(phone, style: TS.h3),
+                    ],
                   ),
                 ),
-              const SizedBox(height: 10),
-              TRButton(
-                label: 'Top up Le $amount',
-                onPressed: () {
-                  s.topUp(amount.toDouble());
-                  Navigator.pop(c);
-                  showToast(context,
-                      'Le $amount added. Approve the prompt on your phone.');
-                },
-              ),
-            ],
-          ),
+                TextButton(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: phone));
+                    Navigator.pop(c);
+                    showToast(context, 'Account number copied');
+                  },
+                  child: Text('Copy', style: TS.label.copyWith(color: TR.navy)),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 14),
+            TRButton(
+              label: support.isEmpty ? 'Agent line coming soon' : 'Call TrustRide',
+              icon: PhosphorIconsFill.phoneCall,
+              onPressed: support.isEmpty
+                  ? null
+                  : () => launchUrl(Uri(scheme: 'tel', path: support)),
+            ),
+            const SizedBox(height: 8),
+            Text('Orange Money and Afrimoney top-ups are coming soon.',
+                textAlign: TextAlign.center,
+                style: TS.small.copyWith(fontSize: 12)),
+          ],
         ),
       ),
     );
@@ -76,11 +84,12 @@ class WalletTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = AppScope.of(context);
-    final activity = [
-      ('Top up · Orange Money', '28 Oct', 200.0),
-      ('Trip · Brookfields → Kissy', '25 Oct', -120.0),
-      ('Referral bonus', '20 Oct', 20.0),
-    ];
+    final uid = s.authUser?.uid;
+    if (uid != null && uid != _uid) {
+      _uid = uid;
+      _tx = Db.walletStream(uid);
+    }
+    final balance = s.profile?.wallet ?? 0;
     return Container(
       color: TR.surface,
       child: SafeArea(
@@ -96,10 +105,7 @@ class WalletTab extends StatelessWidget {
                 gradient: TR.brandGradient,
                 borderRadius: BorderRadius.circular(26),
                 boxShadow: [
-                  BoxShadow(
-                      color: TR.navy.fade(0.3),
-                      blurRadius: 30,
-                      offset: const Offset(0, 14)),
+                  BoxShadow(color: TR.navy.fade(0.3), blurRadius: 30, offset: const Offset(0, 14)),
                 ],
               ),
               child: Stack(
@@ -113,8 +119,7 @@ class WalletTab extends StatelessWidget {
                       height: 140,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(
-                            color: Colors.white.fade(0.12), width: 22),
+                        border: Border.all(color: Colors.white.fade(0.12), width: 22),
                       ),
                     ),
                   ),
@@ -122,105 +127,82 @@ class WalletTab extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        const Icon(PhosphorIconsFill.wallet,
-                            color: TR.greenBright, size: 20),
+                        const Icon(PhosphorIconsFill.wallet, color: TR.greenBright, size: 20),
                         const SizedBox(width: 8),
                         Text('TrustRide balance',
-                            style: TS.label.copyWith(
-                                color: const Color(0xFFD6E2F0), fontSize: 14)),
+                            style: TS.label.copyWith(color: const Color(0xFFD6E2F0), fontSize: 14)),
                       ]),
                       const SizedBox(height: 10),
                       TweenAnimationBuilder<double>(
-                        tween: Tween(begin: 0, end: s.wallet),
+                        tween: Tween(begin: 0, end: balance),
                         duration: const Duration(milliseconds: 900),
                         curve: Curves.easeOutCubic,
                         builder: (_, v, __) => Text(TR.le(v, decimals: true),
-                            style: TS.h1.copyWith(
-                                color: Colors.white, fontSize: 36)),
+                            style: TS.h1.copyWith(color: Colors.white, fontSize: 36)),
                       ),
                       const SizedBox(height: 18),
-                      Row(children: [
-                        TRButton(
-                          label: 'Top up',
-                          kind: BtnKind.light,
-                          expand: false,
-                          height: 46,
-                          icon: PhosphorIconsBold.plus,
-                          onPressed: () => _topUp(context),
-                        ),
-                        const SizedBox(width: 10),
-                        TRButton(
-                          label: 'Send',
-                          kind: BtnKind.dark,
-                          expand: false,
-                          height: 46,
-                          icon: PhosphorIconsBold.paperPlaneTilt,
-                          onPressed: () => showToast(
-                              context, 'Send to a friend is coming soon'),
-                        ),
-                      ]),
+                      TRButton(
+                        label: 'Top up',
+                        kind: BtnKind.light,
+                        expand: false,
+                        height: 46,
+                        icon: PhosphorIconsBold.plus,
+                        onPressed: () => _howToTopUp(s),
+                      ),
                     ],
                   ),
                 ],
               ),
             ).animate().fadeIn().slideY(begin: 0.1),
             const SizedBox(height: 22),
-            const Caps('Payment methods'),
+            const Caps('Activity'),
             const SizedBox(height: 10),
-            TRCard(
-              padding: EdgeInsets.zero,
-              child: Column(children: [
-                for (final m in Mock.payMethods)
-                  ListTile(
-                    leading: PayDot(m.color, m.icon, size: 36),
-                    title: Text(m.name, style: TS.label),
-                    subtitle: Text(
-                        m.id == 'wallet'
-                            ? TR.le(s.wallet, decimals: true)
-                            : m.detail,
-                        style: TS.small),
-                    trailing: s.paymentId == m.id
-                        ? const Pill('Default')
-                        : TextButton(
-                            onPressed: () => s.setPayment(m.id),
-                            child: Text('Set default',
-                                style: TS.small.copyWith(
-                                    color: TR.navy,
-                                    fontWeight: FontWeight.w700)),
-                          ),
-                  ),
-                ListTile(
-                  leading: const IconBubble(PhosphorIconsBold.plus, size: 36),
-                  title: Text('Add payment method',
-                      style: TS.label.copyWith(color: TR.navy)),
-                  onTap: () => showToast(context, 'Link Qmoney coming soon'),
-                ),
-              ]),
-            ),
-            const SizedBox(height: 22),
-            const Caps('Recent activity'),
-            const SizedBox(height: 10),
-            TRCard(
-              padding: EdgeInsets.zero,
-              child: Column(children: [
-                for (final a in activity)
-                  ListTile(
-                    leading: IconBubble(
-                      a.$3 > 0
-                          ? PhosphorIconsBold.arrowDownLeft
-                          : PhosphorIconsBold.arrowUpRight,
-                      color: a.$3 > 0 ? TR.green : TR.navy,
-                      bg: a.$3 > 0 ? TR.greenTint : TR.field,
-                      size: 38,
-                    ),
-                    title: Text(a.$1, style: TS.label.copyWith(fontSize: 14)),
-                    subtitle: Text(a.$2, style: TS.small),
-                    trailing: Text(
-                        '${a.$3 > 0 ? '+' : '−'}${TR.le(a.$3.abs(), decimals: true)}',
-                        style: TS.label.copyWith(
-                            color: a.$3 > 0 ? const Color(0xFF1F6B2E) : TR.ink)),
-                  ),
-              ]),
+            StreamBuilder<List<WalletTx>>(
+              stream: _tx,
+              builder: (context, snap) {
+                if (snap.hasError) {
+                  return const EmptyState(
+                      icon: PhosphorIconsFill.warning,
+                      title: 'Couldn’t load activity');
+                }
+                if (!snap.hasData) return const Loading();
+                final list = snap.data!;
+                if (list.isEmpty) {
+                  return const EmptyState(
+                    icon: PhosphorIconsFill.wallet,
+                    title: 'No wallet activity yet',
+                    body: 'Top-ups and wallet payments will show here.',
+                  );
+                }
+                return TRCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(children: [
+                    for (final a in list)
+                      ListTile(
+                        leading: IconBubble(
+                          a.amount > 0
+                              ? PhosphorIconsBold.arrowDownLeft
+                              : PhosphorIconsBold.arrowUpRight,
+                          color: a.amount > 0 ? TR.green : TR.navy,
+                          bg: a.amount > 0 ? TR.greenTint : TR.field,
+                          size: 38,
+                        ),
+                        title: Text(
+                            a.note.isNotEmpty
+                                ? a.note
+                                : (a.type == 'topup' ? 'Top up' : 'Payment'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TS.label.copyWith(fontSize: 14)),
+                        subtitle: Text(dateLabel(a.createdAt), style: TS.small),
+                        trailing: Text(
+                            '${a.amount > 0 ? '+' : '−'}${TR.le(a.amount.abs(), decimals: true)}',
+                            style: TS.label.copyWith(
+                                color: a.amount > 0 ? const Color(0xFF1F6B2E) : TR.ink)),
+                      ),
+                  ]),
+                );
+              },
             ),
           ],
         ),
