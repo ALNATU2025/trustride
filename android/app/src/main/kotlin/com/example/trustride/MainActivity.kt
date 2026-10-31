@@ -1,5 +1,6 @@
 package com.example.trustride
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// FlutterFragmentActivity is required for fingerprint / face unlock (local_auth).
+class MainActivity : FlutterFragmentActivity()

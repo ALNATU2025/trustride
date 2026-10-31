@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../screens/admin/admin_shell.dart';
+import '../screens/chat_screen.dart';
 import '../screens/driver/driver_shell.dart';
 import '../screens/driver/driver_signup_screen.dart';
+import '../screens/rider/app_lock_screen.dart';
 import '../screens/rider/choose_ride_screen.dart';
 import '../screens/rider/onboarding_screen.dart';
 import '../screens/rider/otp_screen.dart';
@@ -30,6 +32,8 @@ class R {
   static const driverSignup = '/driver-signup';
   static const driver = '/driver';
   static const admin = '/admin';
+  static const chat = '/chat'; // argument: ChatArgs
+  static const appLock = '/app-lock';
 
   static Route<dynamic> generate(RouteSettings settings) {
     final args = settings.arguments;
@@ -48,6 +52,8 @@ class R {
       driverSignup => const DriverSignupScreen(),
       driver => const DriverShell(),
       admin => const AdminShell(),
+      chat when args is ChatArgs => ChatScreen(args: args),
+      appLock => const AppLockScreen(),
       _ => const SplashScreen(),
     };
     return PageRouteBuilder(

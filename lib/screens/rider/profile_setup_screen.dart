@@ -23,6 +23,8 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   final _contactName = TextEditingController();
   final _contactPhone = TextEditingController();
   String _lang = 'English';
+  String? _photo; // new photo picked this session
+  bool _picking = false;
   bool _saving = false;
   bool _filled = false;
 
@@ -44,6 +46,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       _name.text = p.name;
       _email.text = p.email;
       _lang = p.language;
+      _photo = null;
     }
   }
 
@@ -75,6 +78,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         email: _email.text.trim(),
         language: _lang,
         exists: exists,
+        photo: _photo,
         emergency: cPhone.isEmpty
             ? null
             : Contact(
@@ -83,6 +87,10 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                     : _contactName.text.trim(),
                 AuthService.normalise(cPhone)),
       ));
+      if (!mounted) return;
+      if (_photo != null && s.driver != null) {
+        await Db.setPhoto(user.uid, _photo!, isDriver: true);
+      }
       if (!mounted) return;
       if (exists) {
         showToast(context, 'Profile saved');
@@ -96,6 +104,18 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _pickPhoto() async {
+    setState(() => _picking = true);
+    try {
+      final p = await pickPhotoSheet(context);
+      if (p != null && mounted) setState(() => _photo = p);
+    } catch (e) {
+      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
+    } finally {
+      if (mounted) setState(() => _picking = false);
     }
   }
 
@@ -138,35 +158,56 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
             .toUpperCase();
 
     final items = <Widget>[
-      if (editing) const Align(alignment: Alignment.centerLeft, child: TRBack()),
-      if (editing) const SizedBox(height: 16),
+      Row(children: [
+        if (editing) const TRBack(),
+        const Spacer(),
+        const LogoMark(),
+      ]),
+      const SizedBox(height: 16),
       Text(editing ? 'Personal info' : 'Tell us about you', style: TS.h2),
       const SizedBox(height: 6),
       Text('Drivers see your first name when you book.', style: TS.body),
       const SizedBox(height: 24),
       Row(children: [
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          width: 76,
-          height: 76,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: initials != null ? TR.brandGradient : null,
-            color: initials != null ? null : TR.greenTint,
-          ),
-          child: Center(
-            child: initials != null
-                ? Text(initials, style: TS.h2.copyWith(color: Colors.white))
-                : const Icon(PhosphorIconsFill.user, color: TR.green, size: 32),
-          ),
+        Pressable(
+          onTap: _picking ? null : _pickPhoto,
+          semanticLabel: 'Change profile photo',
+          child: Stack(clipBehavior: Clip.none, children: [
+            Avatar(initials ?? '', photo: _photo ?? s.profile?.photo ?? '', size: 88,
+                bg: TR.greenTint, fg: TR.green, ring: true),
+            if (initials == null && (_photo ?? s.profile?.photo ?? '').isEmpty)
+              const Positioned.fill(
+                child: Center(child: Icon(PhosphorIconsFill.user, color: TR.green, size: 34)),
+              ),
+            Positioned(
+              right: -2,
+              bottom: -2,
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: TR.green,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 3),
+                ),
+                child: _picking
+                    ? const Padding(
+                        padding: EdgeInsets.all(6),
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(PhosphorIconsFill.camera, color: Colors.white, size: 15),
+              ),
+            ),
+          ]),
         ),
         const SizedBox(width: 16),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(s.authUser?.phoneNumber ?? '', style: TS.label),
-              Text('Verified phone number', style: TS.small),
+              Text((_photo ?? s.profile?.photo ?? '').isEmpty ? 'Add a profile photo' : 'Looking good',
+                  style: TS.label),
+              Text(s.authUser?.phoneNumber ?? '', style: TS.small),
+              Text('Verified phone number', style: TS.small.copyWith(fontSize: 12, color: TR.green)),
             ],
           ),
         ),

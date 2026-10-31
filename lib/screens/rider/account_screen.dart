@@ -6,6 +6,7 @@ import '../../core/app_state.dart';
 import '../../core/icons.dart';
 import '../../core/routes.dart';
 import '../../core/theme.dart';
+import '../../services/app_lock.dart';
 import '../../services/db.dart';
 import '../../widgets/common.dart';
 
@@ -36,6 +37,12 @@ class AccountTab extends StatelessWidget {
           () => nav.pushNamed(R.search, arguments: 'home')),
       (PhosphorIconsFill.briefcase, 'Work address', p.work?.label ?? 'Not set',
           () => nav.pushNamed(R.search, arguments: 'work')),
+      if (AppLock.instance.supported)
+        (PhosphorIconsFill.lockSimple, 'App lock',
+            AppLock.instance.enabled
+                ? (AppLock.instance.biometrics ? 'PIN + fingerprint' : 'PIN on')
+                : 'Off — add a PIN or fingerprint',
+            () => nav.pushNamed(R.appLock)),
       (PhosphorIconsFill.shieldCheck, 'Safety centre',
           '${p.contacts.length} trusted contact${p.contacts.length == 1 ? '' : 's'}',
           () => nav.pushNamed(R.safety)),
@@ -65,8 +72,41 @@ class AccountTab extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
           children: [
+            const Align(alignment: Alignment.centerRight, child: LogoMark()),
+            const SizedBox(height: 8),
             Row(children: [
-              Avatar(p.initials, size: 68, bg: TR.greenTint, fg: TR.green, ring: true),
+              Pressable(
+                onTap: () async {
+                  try {
+                    final photo = await pickPhotoSheet(context);
+                    if (photo == null) return;
+                    await Db.guard(Db.setPhoto(p.uid, photo, isDriver: d != null));
+                    if (context.mounted) showToast(context, 'Photo updated');
+                  } catch (e) {
+                    if (context.mounted) {
+                      showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
+                    }
+                  }
+                },
+                semanticLabel: 'Change profile photo',
+                child: Stack(clipBehavior: Clip.none, children: [
+                  Avatar(p.initials, photo: p.photo, size: 76, bg: TR.greenTint, fg: TR.green, ring: true),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: TR.green,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2.5),
+                      ),
+                      child: const Icon(PhosphorIconsFill.camera, color: Colors.white, size: 13),
+                    ),
+                  ),
+                ]),
+              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(

@@ -4,6 +4,10 @@
     <!-- Rider pickup location and driver live location while online -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- App lock with fingerprint / face -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <!-- Profile photos from the camera -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <application
         android:label="TrustRide"
         android:name="${applicationName}"

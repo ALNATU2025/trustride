@@ -57,8 +57,11 @@ class _SplashScreenState extends State<SplashScreen> {
               child: Column(
                 children: [
                   const Spacer(),
-                  Image.asset('assets/images/logo.png',
-                          width: 260, height: 260, semanticLabel: 'TrustRide')
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 36),
+                    child: Image.asset('assets/images/logo.png',
+                        width: 320, semanticLabel: 'TrustRide'),
+                  )
                       .animate()
                       .scale(
                           begin: const Offset(0.7, 0.7),
@@ -96,7 +99,25 @@ class _SplashScreenState extends State<SplashScreen> {
                       Text('Made in Salone · Freetown', style: TS.small),
                     ],
                   ).animate().fadeIn(delay: 900.ms).slideY(begin: 0.4),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 14),
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: TR.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: TR.line),
+                    ),
+                    child: Column(children: [
+                      Text('POWERED BY',
+                          style: TS.caps.copyWith(fontSize: 10, letterSpacing: 1.6)),
+                      const SizedBox(height: 2),
+                      Text('Easy Trust Corporation LTD',
+                          textAlign: TextAlign.center,
+                          style: TS.label.copyWith(color: TR.navy, fontSize: 14)),
+                    ]),
+                  ).animate().fadeIn(delay: 1100.ms).slideY(begin: 0.4),
+                  const SizedBox(height: 24),
                 ],
               ),
             ),

@@ -17,8 +17,9 @@ import '../../services/geo_service.dart';
 import '../../services/location_service.dart';
 import '../../widgets/common.dart';
 import '../../widgets/live_map.dart';
+import '../chat_screen.dart';
 
-/// Requests within this distance of the driver are offered.
+/// Requests within this distance of the driver are shown.
 const _requestRadiusKm = 8.0;
 
 class DriverHomeTab extends StatefulWidget {
@@ -27,26 +28,18 @@ class DriverHomeTab extends StatefulWidget {
   State<DriverHomeTab> createState() => _DriverHomeTabState();
 }
 
-class _DriverHomeTabState extends State<DriverHomeTab>
-    with SingleTickerProviderStateMixin {
+class _DriverHomeTabState extends State<DriverHomeTab> {
   String? _uid;
   Stream<List<Trip>>? _myTrips;
   Stream<List<Trip>>? _requests;
   StreamSubscription<LatLng>? _gps;
   DateTime _lastSent = DateTime(2000);
   LatLng? _me;
-  final Set<String> _declined = {};
-  String? _offeredId;
+  final Set<String> _hidden = {};
+  final Map<String, double> _sent = {}; // tripId -> my price
+  final Set<String> _seen = {};
   bool _busy = false;
   bool _toggling = false;
-
-  late final AnimationController _countdown = AnimationController(
-      vsync: this, duration: const Duration(seconds: 20))
-    ..addStatusListener((st) {
-      if (st == AnimationStatus.completed && _offeredId != null) {
-        setState(() => _declined.add(_offeredId!));
-      }
-    });
 
   @override
   void initState() {
@@ -63,7 +56,6 @@ class _DriverHomeTabState extends State<DriverHomeTab>
   @override
   void dispose() {
     _gps?.cancel();
-    _countdown.dispose();
     super.dispose();
   }
 
@@ -86,6 +78,12 @@ class _DriverHomeTabState extends State<DriverHomeTab>
         _gps?.cancel();
         await Db.setOnline(d.uid, false);
       } else {
+        if (d.account.isEmpty) {
+          showToast(context, 'Add your payment account first so riders can pay you',
+              icon: PhosphorIconsFill.bank);
+          Navigator.of(context).pushNamed(R.driverSignup);
+          return;
+        }
         final err = await LocationService.ensurePermission();
         if (err != null) {
           if (mounted) showToast(context, err, icon: PhosphorIconsFill.warning);
@@ -111,17 +109,131 @@ class _DriverHomeTabState extends State<DriverHomeTab>
     }
   }
 
-  Future<void> _accept(Trip t, DriverProfile d) async {
-    _countdown.stop();
+  int _etaTo(LatLng p) {
+    if (_me == null) return 5;
+    final km = GeoService.km(_me!, p);
+    return (km * 1.3 / 20 * 60).ceil().clamp(1, 60).toInt();
+  }
+
+  /// Sheet where the driver accepts the rider's price or proposes their own.
+  Future<void> _offerSheet(Trip t, DriverProfile d) async {
+    final c = AppScope.read(context).config.commission;
+    final step = t.fare >= 100 ? 10.0 : 5.0;
+    var price = _sent[t.id] ?? t.fare;
+    final ctrl = TextEditingController(text: price.round().toString());
+    final result = await showModalBottomSheet<double>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheet) => StatefulBuilder(
+        builder: (sheet, set) {
+          void setPrice(double v) {
+            if (v < 1) return;
+            price = v.roundToDouble();
+            ctrl.text = price.round().toString();
+            set(() {});
+          }
+
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(sheet).viewInsets.bottom),
+            child: BottomPanel(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SheetHandle(),
+                  const SizedBox(height: 14),
+                  Row(children: [
+                    Avatar(initialsOf(t.riderName), photo: t.riderPhoto, size: 44),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Your price for ${t.riderName.split(' ').first}', style: TS.h3),
+                          Text('${t.distanceKm.toStringAsFixed(1)} km · ${t.durationMin.round()} min · ${t.paymentLabel}',
+                              style: TS.small.copyWith(fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 16),
+                  Row(children: [
+                    CircleIconButton(
+                        icon: PhosphorIconsBold.minus,
+                        label: 'Lower',
+                        size: 52,
+                        onTap: () => setPrice(price - step)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: ctrl,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        textAlign: TextAlign.center,
+                        style: TS.h1.copyWith(color: TR.navy, fontSize: 32),
+                        onChanged: (v) => set(() => price = double.tryParse(v) ?? price),
+                        decoration: const InputDecoration(prefixText: 'Le '),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    CircleIconButton(
+                        icon: PhosphorIconsBold.plus,
+                        label: 'Raise',
+                        size: 52,
+                        onTap: () => setPrice(price + step)),
+                  ]),
+                  const SizedBox(height: 10),
+                  Wrap(spacing: 8, children: [
+                    for (final add in [0.0, step, step * 2, step * 4])
+                      ChoiceChip(
+                        label: Text(add == 0 ? 'Rider’s ${TR.le(t.fare)}' : '+${TR.le(add)}'),
+                        selected: price == t.fare + add,
+                        selectedColor: TR.greenTint,
+                        onSelected: (_) => setPrice(t.fare + add),
+                      ),
+                  ]),
+                  const SizedBox(height: 10),
+                  Text(
+                      'Rider offered ${TR.le(t.fare)} · TrustRide recommends ${TR.le(t.suggestedFare)}\nYou keep ${TR.le(price * (1 - c), decimals: true)} after ${(c * 100).round()}% commission',
+                      style: TS.small),
+                  const SizedBox(height: 16),
+                  TRButton(
+                    label: price == t.fare ? 'Accept ${TR.le(price)}' : 'Send offer ${TR.le(price)}',
+                    icon: PhosphorIconsBold.paperPlaneTilt,
+                    onPressed: price > 0 ? () => Navigator.pop(sheet, price) : null,
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    ctrl.dispose();
+    if (result == null) return;
     setState(() => _busy = true);
     try {
-      await Db.acceptTrip(t.id, d);
-      HapticFeedback.heavyImpact();
+      await Db.guard(Db.sendOffer(tripId: t.id, d: d, price: result, etaMin: _etaTo(t.pickup.latLng)));
+      HapticFeedback.mediumImpact();
+      setState(() => _sent[t.id] = result);
+      if (mounted) {
+        showToast(context, 'Offer sent. Waiting for the rider to choose.',
+            icon: PhosphorIconsFill.paperPlaneTilt);
+      }
     } catch (e) {
-      _declined.add(t.id);
-      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.info);
+      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _withdraw(Trip t, DriverProfile d) async {
+    try {
+      await Db.withdrawOffer(t.id, d.uid);
+      setState(() => _sent.remove(t.id));
+    } catch (e) {
+      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
     }
   }
 
@@ -138,8 +250,7 @@ class _DriverHomeTabState extends State<DriverHomeTab>
 
   Future<void> _navigate(LatLng to) async {
     final uri = kIsWeb
-        ? Uri.parse(
-            'https://www.openstreetmap.org/directions?to=${to.latitude},${to.longitude}')
+        ? Uri.parse('https://www.openstreetmap.org/directions?to=${to.latitude},${to.longitude}')
         : Uri.parse(
             'https://www.google.com/maps/dir/?api=1&destination=${to.latitude},${to.longitude}&travelmode=driving');
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
@@ -182,8 +293,7 @@ class _DriverHomeTabState extends State<DriverHomeTab>
     if (ok != true) return;
     if (pin != t.pin) {
       if (mounted) {
-        showToast(context, 'Wrong PIN. Ask the rider to check their app.',
-            icon: PhosphorIconsFill.warning);
+        showToast(context, 'Wrong PIN. Ask the rider to check their app.', icon: PhosphorIconsFill.warning);
       }
       return;
     }
@@ -192,32 +302,31 @@ class _DriverHomeTabState extends State<DriverHomeTab>
 
   Future<void> _complete(Trip t) async {
     final cash = t.payment == 'cash';
-    final ok = await showDialog<bool>(
+    final received = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Text(cash ? 'Collect ${TR.le(t.fare)} cash' : 'Finish this trip?', style: TS.h3),
+        title: Text('Finish trip · ${TR.le(t.fare)}', style: TS.h3),
         content: Text(
             cash
-                ? 'Confirm you received ${TR.le(t.fare)} in cash from ${t.riderName}.'
-                : 'The rider pays ${TR.le(t.fare)} from their TrustRide Wallet.',
+                ? 'Collect ${TR.le(t.fare)} in cash from ${t.riderName.split(' ').first}.'
+                : '${t.riderName.split(' ').first} will transfer ${TR.le(t.fare)} to your ${t.driverAccount.title} account. Confirm when the money arrives.',
             style: TS.body),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(c, false),
-              child: Text('Not yet', style: TS.label.copyWith(color: TR.muted))),
+              child: Text(cash ? 'Not paid yet' : 'Not received yet',
+                  style: TS.label.copyWith(color: TR.muted))),
           TextButton(
               onPressed: () => Navigator.pop(c, true),
-              child: Text(cash ? 'Cash received' : 'Complete',
+              child: Text(cash ? 'Cash received' : 'Money received',
                   style: TS.label.copyWith(color: TR.green))),
         ],
       ),
     );
-    if (ok != true) return;
-    await _run(() => Db.completeTrip(t.id, cashCollected: cash));
-    if (mounted) {
-      showToast(context, 'Trip complete · ${TR.le(t.fare)}', icon: PhosphorIconsFill.coins);
-    }
+    if (received == null) return;
+    await _run(() => Db.completeTrip(t.id, paymentReceived: received));
+    if (mounted) showToast(context, 'Trip complete · ${TR.le(t.fare)}', icon: PhosphorIconsFill.coins);
   }
 
   Future<void> _driverCancel(Trip t) async {
@@ -267,8 +376,7 @@ class _DriverHomeTabState extends State<DriverHomeTab>
             t.completedAt!.year == now.year &&
             t.completedAt!.month == now.month &&
             t.completedAt!.day == now.day);
-        final todayNet = today.fold<double>(
-            0, (a, t) => a + t.fare * (1 - s.config.commission) + t.tip);
+        final todayNet = today.fold<double>(0, (a, t) => a + t.fare * (1 - s.config.commission) + t.tip);
 
         if (current != null) {
           return _layout(d, todayNet, current: current, panel: _tripPanel(current));
@@ -276,42 +384,36 @@ class _DriverHomeTabState extends State<DriverHomeTab>
         return StreamBuilder<List<Trip>>(
           stream: _requests,
           builder: (context, reqSnap) {
-            final offers = (reqSnap.data ?? const <Trip>[])
+            final open = (reqSnap.data ?? const <Trip>[])
                 .where((t) =>
                     t.rideType == d.vehicleType &&
                     t.riderId != d.uid &&
-                    !_declined.contains(t.id) &&
+                    !_hidden.contains(t.id) &&
                     (_me == null || GeoService.km(_me!, t.pickup.latLng) <= _requestRadiusKm))
                 .toList()
               ..sort((a, b) => _me == null
                   ? 0
-                  : GeoService.km(_me!, a.pickup.latLng)
-                      .compareTo(GeoService.km(_me!, b.pickup.latLng)));
-            final offer = wantRequests && offers.isNotEmpty ? offers.first : null;
-            if (offer?.id != _offeredId) {
-              _offeredId = offer?.id;
-              if (offer != null) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  HapticFeedback.heavyImpact();
-                  _countdown.forward(from: 0);
-                });
-              }
+                  : GeoService.km(_me!, a.pickup.latLng).compareTo(GeoService.km(_me!, b.pickup.latLng)));
+            // Forget offers on trips that are no longer open.
+            _sent.removeWhere((id, _) => !(reqSnap.data ?? const <Trip>[]).any((t) => t.id == id));
+            final fresh = open.where((t) => !_seen.contains(t.id)).toList();
+            if (fresh.isNotEmpty) {
+              _seen.addAll(fresh.map((t) => t.id));
+              WidgetsBinding.instance.addPostFrameCallback((_) => HapticFeedback.heavyImpact());
             }
+            final list = wantRequests ? open : const <Trip>[];
             return _layout(d, todayNet,
-                offer: offer,
-                panel: offer != null
-                    ? _requestPanel(offer, d)
-                    : _idlePanel(d, today.length, todayNet));
+                preview: list.isEmpty ? null : list.first,
+                panel: list.isEmpty ? _idlePanel(d, today.length, todayNet) : _requestsPanel(list, d));
           },
         );
       },
     );
   }
 
-  Widget _layout(DriverProfile d, double todayNet,
-      {Trip? current, Trip? offer, required Widget panel}) {
+  Widget _layout(DriverProfile d, double todayNet, {Trip? current, Trip? preview, required Widget panel}) {
     final onTrip = current?.status == TripStatus.inProgress;
-    final focus = current ?? offer;
+    final focus = current ?? preview;
     return Stack(
       children: [
         Positioned.fill(
@@ -319,9 +421,9 @@ class _DriverHomeTabState extends State<DriverHomeTab>
             me: _me ?? d.location,
             center: focus == null ? (_me ?? d.location) : null,
             pickup: focus == null || onTrip ? null : focus.pickup.latLng,
-            dropoff: focus == null ? null : (onTrip || offer != null ? focus.dropoff.latLng : null),
+            dropoff: focus == null ? null : (onTrip || preview != null ? focus.dropoff.latLng : null),
             fitAll: focus != null,
-            bottomPadding: 380,
+            bottomPadding: 420,
           ),
         ),
         SafeArea(
@@ -342,22 +444,23 @@ class _DriverHomeTabState extends State<DriverHomeTab>
                     TweenAnimationBuilder<double>(
                       tween: Tween(begin: 0, end: todayNet),
                       duration: const Duration(milliseconds: 800),
-                      builder: (_, v, __) => Text(TR.le(v, decimals: true), style: TS.h3),
+                      builder: (_, v, __) => Text(TR.le(v), style: TS.h3),
                     ),
                   ],
                 ),
               ),
+              const Spacer(),
+              const LogoMark(size: 46),
               const Spacer(),
               CircleIconButton(
                 icon: PhosphorIconsBold.userSwitch,
                 label: 'Switch to rider app',
                 background: Colors.white,
                 shadow: true,
-                onTap: () => Navigator.of(context)
-                    .pushNamedAndRemoveUntil(R.rider, (_) => false),
+                onTap: () => Navigator.of(context).pushNamedAndRemoveUntil(R.rider, (_) => false),
               ),
-              const SizedBox(width: 10),
-              Avatar(d.initials, size: 46, ring: true),
+              const SizedBox(width: 8),
+              Avatar(d.initials, photo: d.photo, size: 46, ring: true),
             ]),
           ),
         ),
@@ -371,7 +474,7 @@ class _DriverHomeTabState extends State<DriverHomeTab>
               child: FadeTransition(opacity: a, child: c),
             ),
             child: KeyedSubtree(
-              key: ValueKey('${current?.id}-${current?.status}-${offer?.id}-${d.online}'),
+              key: ValueKey('${current?.id}-${current?.status}-${preview == null}-${d.online}'),
               child: panel,
             ),
           ),
@@ -415,18 +518,13 @@ class _DriverHomeTabState extends State<DriverHomeTab>
                 ),
                 borderRadius: BorderRadius.circular(33),
                 boxShadow: [
-                  BoxShadow(
-                      color: (on ? TR.navy : TR.green).fade(0.35),
-                      blurRadius: 20,
-                      offset: const Offset(0, 8)),
+                  BoxShadow(color: (on ? TR.navy : TR.green).fade(0.35), blurRadius: 20, offset: const Offset(0, 8)),
                 ],
               ),
               child: _toggling
                   ? const Center(
                       child: SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)))
+                          width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)))
                   : Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -448,14 +546,12 @@ class _DriverHomeTabState extends State<DriverHomeTab>
                   height: 8,
                   margin: const EdgeInsets.only(right: 8),
                   decoration: const BoxDecoration(color: TR.greenBright, shape: BoxShape.circle),
-                )
-                    .animate(onPlay: (c) => c.repeat(reverse: true))
-                    .fade(begin: 0.3, end: 1, duration: 700.ms),
+                ).animate(onPlay: (c) => c.repeat(reverse: true)).fade(begin: 0.3, end: 1, duration: 700.ms),
               Flexible(
                 child: Text(
                   on
-                      ? 'Looking for ${AppScope.read(context).config.ride(d.vehicleType).name} requests within ${_requestRadiusKm.round()} km. Keep the app open.'
-                      : 'You’re offline. Go online to receive ride requests.',
+                      ? 'Looking for ${AppScope.read(context).config.ride(d.vehicleType).name} requests within ${_requestRadiusKm.round()} km. You set your own price.'
+                      : 'You’re offline. Go online to see ride requests.',
                   textAlign: TextAlign.center,
                   style: TS.small,
                 ),
@@ -468,8 +564,7 @@ class _DriverHomeTabState extends State<DriverHomeTab>
             const SizedBox(width: 8),
             _stat(TR.le(todayNet), 'Earned today', PhosphorIconsFill.coins),
             const SizedBox(width: 8),
-            _stat(d.ratingCount == 0 ? 'New' : d.rating.toStringAsFixed(1), 'Rating',
-                PhosphorIconsFill.star),
+            _stat(d.ratingCount == 0 ? 'New' : d.rating.toStringAsFixed(1), 'Rating', PhosphorIconsFill.star),
           ]),
         ],
       ),
@@ -496,141 +591,157 @@ class _DriverHomeTabState extends State<DriverHomeTab>
         ),
       );
 
-  Widget _requestPanel(Trip t, DriverProfile d) {
-    final s = AppScope.read(context);
-    final pickupKm = _me == null ? null : GeoService.km(_me!, t.pickup.latLng);
-    final net = t.fare * (1 - s.config.commission);
+  Widget _requestsPanel(List<Trip> list, DriverProfile d) {
+    final h = MediaQuery.of(context).size.height;
     return BottomPanel(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Pill('New ${t.rideName} request', icon: PhosphorIconsFill.lightning),
-            const Spacer(),
-            SizedBox(
-              width: 52,
-              height: 52,
-              child: AnimatedBuilder(
-                animation: _countdown,
-                builder: (_, __) => Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    SizedBox(
-                      width: 52,
-                      height: 52,
-                      child: CircularProgressIndicator(
-                        value: 1 - _countdown.value,
-                        strokeWidth: 4,
-                        color: _countdown.value > 0.7 ? TR.danger : TR.green,
-                        backgroundColor: TR.line,
-                      ),
-                    ),
-                    Text('${(20 * (1 - _countdown.value)).ceil()}', style: TS.h3),
-                  ],
-                ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: h * 0.55),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SheetHandle(),
+            const SizedBox(height: 10),
+            Row(children: [
+              const Icon(PhosphorIconsFill.lightning, color: TR.gold, size: 20),
+              const SizedBox(width: 6),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(TR.le(t.fare, decimals: true),
-                        style: TS.h1.copyWith(color: TR.navy, fontSize: 34)),
-                    Text('You earn ${TR.le(net, decimals: true)} after commission',
-                        style: TS.small),
-                  ],
-                ),
+                child: Text('${list.length} ride request${list.length == 1 ? '' : 's'} nearby', style: TS.h3),
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text('${t.distanceKm.toStringAsFixed(1)} km · ${t.durationMin.round()} min',
-                      style: TS.label.copyWith(fontSize: 14)),
-                  if (pickupKm != null)
-                    Text('Pickup ${pickupKm.toStringAsFixed(1)} km away', style: TS.small),
-                ],
+              TextButton(
+                onPressed: _toggling ? null : () => _toggle(d),
+                child: Text('Go offline', style: TS.label.copyWith(color: TR.muted, fontSize: 13)),
               ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          _routeBox(t),
-          const SizedBox(height: 12),
-          Row(children: [
-            Avatar(t.riderName.isEmpty ? '?' : t.riderName[0].toUpperCase(),
-                size: 36, bg: TR.greenTint, fg: TR.green),
-            const SizedBox(width: 10),
-            Expanded(
-                child: Text(t.riderName.split(' ').first,
-                    style: TS.label.copyWith(fontSize: 14))),
-            Pill(t.payment == 'wallet' ? 'Wallet' : 'Cash',
-                kind: t.payment == 'wallet' ? PillKind.info : PillKind.warning),
-          ]),
-          const SizedBox(height: 16),
-          Row(children: [
-            Expanded(
-              child: TRButton(
-                  label: 'Decline',
-                  kind: BtnKind.outline,
-                  height: 58,
-                  onPressed: () {
-                    _countdown.stop();
-                    setState(() => _declined.add(t.id));
-                  }),
+            ]),
+            const SizedBox(height: 6),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: list.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (context, i) => _requestCard(list[i], d)
+                    .animate(key: ValueKey(list[i].id))
+                    .fadeIn(duration: 300.ms)
+                    .slideY(begin: 0.2, curve: Curves.easeOutCubic),
+              ),
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              flex: 2,
-              child: TRButton(
-                  label: 'Accept',
-                  icon: PhosphorIconsBold.check,
-                  height: 58,
-                  loading: _busy,
-                  onPressed: () => _accept(t, d)),
-            ),
-          ]),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _routeBox(Trip t) => Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: TR.surface, borderRadius: BorderRadius.circular(18)),
-        child: Row(children: [
-          const RouteRail(height: 30),
-          const SizedBox(width: 12),
+  Widget _requestCard(Trip t, DriverProfile d) {
+    final s = AppScope.read(context);
+    final pickupKm = _me == null ? null : GeoService.km(_me!, t.pickup.latLng);
+    final mine = _sent[t.id];
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: mine != null ? TR.greenTint : TR.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: mine != null ? TR.green : TR.line),
+      ),
+      child: Column(children: [
+        Row(children: [
+          Avatar(initialsOf(t.riderName), photo: t.riderPhoto, size: 42),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(t.pickup.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TS.label),
-                Text(t.pickup.address,
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: TS.small.copyWith(fontSize: 12)),
-                const SizedBox(height: 8),
-                Text(t.dropoff.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TS.label),
-                Text(t.dropoff.address,
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: TS.small.copyWith(fontSize: 12)),
+                Text(t.forSomeoneElse ? '${t.passengerName} (for ${t.riderName.split(' ').first})'
+                    : t.riderName.split(' ').first,
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: TS.label),
+                Text(
+                    '${pickupKm == null ? '' : '${pickupKm.toStringAsFixed(1)} km away · '}${t.distanceKm.toStringAsFixed(1)} km trip',
+                    style: TS.small.copyWith(fontSize: 12)),
               ],
             ),
           ),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(TR.le(t.fare), style: TS.h2.copyWith(color: TR.navy, fontSize: 22)),
+            Pill(t.payment == 'transfer' ? 'Transfer' : 'Cash',
+                kind: t.payment == 'transfer' ? PillKind.info : PillKind.warning),
+          ]),
         ]),
-      );
+        const SizedBox(height: 10),
+        Row(children: [
+          const RouteRail(height: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(t.pickup.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TS.label.copyWith(fontSize: 13.5)),
+              const SizedBox(height: 8),
+              Text(t.dropoff.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TS.label.copyWith(fontSize: 13.5)),
+            ]),
+          ),
+        ]),
+        if (t.note.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Row(children: [
+            const Icon(PhosphorIconsFill.chatText, size: 15, color: TR.muted),
+            const SizedBox(width: 6),
+            Expanded(child: Text(t.note, style: TS.small.copyWith(fontSize: 12.5, color: TR.ink))),
+          ]),
+        ],
+        const SizedBox(height: 12),
+        if (mine != null)
+          Row(children: [
+            const Icon(PhosphorIconsFill.paperPlaneTilt, color: TR.green, size: 18),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('You offered ${TR.le(mine)} · waiting for rider',
+                  style: TS.label.copyWith(fontSize: 13, color: const Color(0xFF1F6B2E))),
+            ),
+            TextButton(
+                onPressed: () => _offerSheet(t, d),
+                child: Text('Change', style: TS.label.copyWith(color: TR.navy, fontSize: 13))),
+            TextButton(
+                onPressed: () => _withdraw(t, d),
+                child: Text('Withdraw', style: TS.label.copyWith(color: TR.danger, fontSize: 13))),
+          ])
+        else
+          Row(children: [
+            Expanded(
+              child: TRButton(
+                label: 'Skip',
+                kind: BtnKind.outline,
+                height: 48,
+                onPressed: () => setState(() => _hidden.add(t.id)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 2,
+              child: TRButton(
+                label: 'Offer your price',
+                icon: PhosphorIconsBold.tag,
+                height: 48,
+                loading: _busy,
+                onPressed: () => _offerSheet(t, d),
+              ),
+            ),
+          ]),
+        if (s.config.commission > 0 && mine == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text('At the rider’s price you keep ${TR.le(t.fare * (1 - s.config.commission))}',
+                style: TS.small.copyWith(fontSize: 11.5)),
+          ),
+      ]),
+    );
+  }
 
   Widget _tripPanel(Trip t) {
     final toPickup = t.status == TripStatus.accepted;
     final atPickup = t.status == TripStatus.arrived;
     final onTrip = t.status == TripStatus.inProgress;
-    final title = toPickup
-        ? 'Pick up ${t.riderName.split(' ').first}'
-        : atPickup
-            ? 'Waiting for ${t.riderName.split(' ').first}'
-            : 'Drop off at ${t.dropoff.label}';
+    final who = t.forSomeoneElse ? t.passengerName.split(' ').first : t.riderName.split(' ').first;
+    final callPhone = t.forSomeoneElse && t.passengerPhone.isNotEmpty ? t.passengerPhone : t.riderPhone;
+    final title = toPickup ? 'Pick up $who' : atPickup ? 'Waiting for $who' : 'Drop off at ${t.dropoff.label}';
     final dest = onTrip ? t.dropoff : t.pickup;
     return BottomPanel(
       child: Column(
@@ -640,8 +751,7 @@ class _DriverHomeTabState extends State<DriverHomeTab>
           const SheetHandle(),
           const SizedBox(height: 14),
           Row(children: [
-            IconBubble(onTrip ? PhosphorIconsFill.flagCheckered : PhosphorIconsFill.navigationArrow,
-                color: Colors.white, bg: onTrip ? TR.green : TR.navy, size: 48),
+            Avatar(initialsOf(t.riderName), photo: t.riderPhoto, size: 50, ring: true),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -653,9 +763,24 @@ class _DriverHomeTabState extends State<DriverHomeTab>
                 ],
               ),
             ),
-            Text(TR.le(t.fare), style: TS.h3.copyWith(color: TR.navy)),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text(TR.le(t.fare), style: TS.h3.copyWith(color: TR.navy)),
+              Text(t.payment == 'transfer' ? 'Transfer' : 'Cash', style: TS.small.copyWith(fontSize: 11.5)),
+            ]),
           ]),
-          const SizedBox(height: 14),
+          if (t.note.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: TR.amberTint, borderRadius: BorderRadius.circular(12)),
+              child: Row(children: [
+                const Icon(PhosphorIconsFill.chatText, color: TR.amberInk, size: 18),
+                const SizedBox(width: 8),
+                Expanded(child: Text(t.note, style: TS.small.copyWith(color: TR.ink))),
+              ]),
+            ),
+          ],
+          const SizedBox(height: 12),
           if (!atPickup)
             TRButton(
               label: onTrip ? 'Navigate to drop-off' : 'Navigate to pickup',
@@ -685,12 +810,17 @@ class _DriverHomeTabState extends State<DriverHomeTab>
             CircleIconButton(
                 icon: PhosphorIconsFill.phone,
                 label: 'Call rider',
-                onTap: () => launchUrl(Uri(scheme: 'tel', path: t.riderPhone))),
+                onTap: () => launchUrl(Uri(scheme: 'tel', path: callPhone))),
             const SizedBox(width: 10),
             CircleIconButton(
                 icon: PhosphorIconsFill.chatCircleDots,
-                label: 'SMS rider',
-                onTap: () => launchUrl(Uri.parse('sms:${t.riderPhone}'))),
+                label: 'Chat with rider',
+                onTap: () => Navigator.of(context).pushNamed(R.chat,
+                    arguments: ChatArgs(
+                        tripId: t.id,
+                        otherName: t.riderName,
+                        otherPhone: t.riderPhone,
+                        otherPhoto: t.riderPhoto))),
             const SizedBox(width: 12),
             Expanded(
               child: TRButton(
@@ -698,7 +828,7 @@ class _DriverHomeTabState extends State<DriverHomeTab>
                     ? 'I’ve arrived'
                     : atPickup
                         ? 'Start trip'
-                        : (t.payment == 'cash' ? 'Complete · collect cash' : 'Complete trip'),
+                        : 'Complete trip',
                 kind: onTrip ? BtnKind.primary : BtnKind.dark,
                 height: 54,
                 loading: _busy,

@@ -6,13 +6,14 @@ import 'package:latlong2/latlong.dart';
 import '../core/models.dart';
 
 /// All Firestore reads and writes. Collections:
-///   users/{uid}        rider profile, wallet balance, role
-///   drivers/{uid}      driver application, status, online + location
-///   trips/{id}         every ride from request to completion
-///   walletTx/{id}      wallet ledger (top-ups, wallet trip payments, tips)
-///   payouts/{id}       driver cash-out requests
-///   sos/{id}           emergency alerts
-///   config/app         prices and business settings (admin-editable)
+///   users/{uid}                    rider profile, photo, role
+///   drivers/{uid}                  driver application, payment account,
+///                                  online + location, commission paid
+///   trips/{id}                     every ride from request to completion
+///   trips/{id}/offers/{driverId}   drivers' prices for an open request
+///   trips/{id}/messages/{id}       rider ↔ driver chat
+///   sos/{id}                       emergency alerts
+///   config/app                     prices and business settings
 class Db {
   static final _fs = FirebaseFirestore.instance;
 
@@ -22,14 +23,14 @@ class Db {
       _fs.collection('drivers');
   static CollectionReference<Map<String, dynamic>> get trips =>
       _fs.collection('trips');
-  static CollectionReference<Map<String, dynamic>> get walletTx =>
-      _fs.collection('walletTx');
-  static CollectionReference<Map<String, dynamic>> get payouts =>
-      _fs.collection('payouts');
   static CollectionReference<Map<String, dynamic>> get sos =>
       _fs.collection('sos');
   static DocumentReference<Map<String, dynamic>> get configDoc =>
       _fs.collection('config').doc('app');
+  static CollectionReference<Map<String, dynamic>> offers(String tripId) =>
+      trips.doc(tripId).collection('offers');
+  static CollectionReference<Map<String, dynamic>> messages(String tripId) =>
+      trips.doc(tripId).collection('messages');
 
   static FieldValue get now => FieldValue.serverTimestamp();
 
@@ -38,7 +39,7 @@ class Db {
   static Future<T> guard<T>(Future<T> f) => f.timeout(
         const Duration(seconds: 20),
         onTimeout: () => throw Exception(
-            'Can\u2019t reach the TrustRide database. Check your internet '
+            'Can’t reach the TrustRide database. Check your internet '
             'connection, and that Firestore Database is created in Firebase.'),
       );
 
@@ -64,6 +65,7 @@ class Db {
     required String email,
     required String language,
     required bool exists,
+    String? photo,
     Contact? emergency,
   }) async {
     final data = <String, dynamic>{
@@ -71,11 +73,11 @@ class Db {
       'phone': phone,
       'email': email,
       'language': language,
+      if (photo != null) 'photo': photo,
       'updatedAt': now,
     };
     if (!exists) {
       data['role'] = 'rider';
-      data['wallet'] = 0;
       data['createdAt'] = now;
       data['contacts'] =
           emergency == null ? <Map<String, dynamic>>[] : [emergency.toMap()];
@@ -86,6 +88,14 @@ class Db {
       }
       await users.doc(uid).update(data);
     }
+  }
+
+  /// Saves a profile photo on the user and, if they drive, on their driver
+  /// record too (so riders see it).
+  static Future<void> setPhoto(String uid, String photo,
+      {bool isDriver = false}) async {
+    await users.doc(uid).update({'photo': photo});
+    if (isDriver) await drivers.doc(uid).update({'photo': photo});
   }
 
   static Future<void> setLanguage(String uid, String lang) =>
@@ -103,46 +113,6 @@ class Db {
   static Future<void> setSetting(String uid, String key, bool value) =>
       users.doc(uid).update({'settings.$key': value});
 
-  static Future<AppUser?> findUserByPhone(String phone) async {
-    final q = await users.where('phone', isEqualTo: phone).limit(1).get();
-    return q.docs.isEmpty ? null : AppUser.fromDoc(q.docs.first);
-  }
-
-  // ---------------- wallet ----------------
-  static Stream<List<WalletTx>> walletStream(String uid) => walletTx
-      .where('uid', isEqualTo: uid)
-      .limit(100)
-      .snapshots()
-      .map((q) {
-        final list = q.docs.map(WalletTx.fromDoc).toList();
-        list.sort((a, b) => (b.createdAt ?? DateTime(2100))
-            .compareTo(a.createdAt ?? DateTime(2100)));
-        return list;
-      });
-
-  /// Admin only: credit a rider's wallet (e.g. after cash or mobile money
-  /// received at an agent).
-  static Future<void> adminTopUp(
-      {required String uid,
-      required double amount,
-      required String note,
-      required String adminId}) {
-    return _fs.runTransaction((tx) async {
-      final ref = users.doc(uid);
-      final snap = await tx.get(ref);
-      final bal = toD(snap.data()?['wallet']);
-      tx.update(ref, {'wallet': bal + amount});
-      tx.set(walletTx.doc(), {
-        'uid': uid,
-        'amount': amount,
-        'type': amount >= 0 ? 'topup' : 'adjust',
-        'note': note,
-        'by': adminId,
-        'createdAt': now,
-      });
-    });
-  }
-
   // ---------------- trips: rider ----------------
   static String _pin() => (1000 + Random.secure().nextInt(9000)).toString();
 
@@ -152,14 +122,22 @@ class Db {
     required Place pickup,
     required Place dropoff,
     required RouteInfo route,
-    required double fare,
+    required double suggestedFare,
+    required double offer,
     required String payment,
+    required String note,
+    required String passengerName,
+    required String passengerPhone,
   }) async {
     final ref = trips.doc();
     await ref.set({
       'riderId': rider.uid,
       'riderName': rider.name,
       'riderPhone': rider.phone,
+      'riderPhoto': rider.photo,
+      'passengerName': passengerName,
+      'passengerPhone': passengerPhone,
+      'note': note,
       'driverId': '',
       'rideType': ride.id,
       'rideName': ride.name,
@@ -167,7 +145,8 @@ class Db {
       'dropoff': dropoff.toMap(),
       'distanceKm': double.parse(route.distanceKm.toStringAsFixed(2)),
       'durationMin': route.durationMin.roundToDouble(),
-      'fare': fare,
+      'suggestedFare': suggestedFare,
+      'fare': offer,
       'payment': payment,
       'status': TripStatus.requested,
       'pin': _pin(),
@@ -203,6 +182,47 @@ class Db {
     return list.isEmpty ? null : list.first;
   }
 
+  /// Rider raises (or lowers) their offer while still searching.
+  static Future<void> updateRiderOffer(String tripId, double fare) =>
+      trips.doc(tripId).update({'fare': fare, 'updatedAt': now});
+
+  static Stream<List<Offer>> offersStream(String tripId) =>
+      offers(tripId).snapshots().map((q) {
+        final list = q.docs.map(Offer.fromDoc).toList()
+          ..sort((a, b) => a.price.compareTo(b.price));
+        return list;
+      });
+
+  /// Rider picks a driver's offer: the trip takes that driver and price.
+  static Future<void> acceptOffer(String tripId, Offer o) {
+    return _fs.runTransaction((tx) async {
+      final ref = trips.doc(tripId);
+      final snap = await tx.get(ref);
+      if (toS(snap.data()?['status']) != TripStatus.requested) {
+        throw Exception('This request is no longer open');
+      }
+      final offerSnap = await tx.get(offers(tripId).doc(o.driverId));
+      if (!offerSnap.exists) {
+        throw Exception('That driver withdrew their offer');
+      }
+      final price = toD(offerSnap.data()?['price']);
+      tx.update(ref, {
+        'status': TripStatus.accepted,
+        'driverId': o.driverId,
+        'driverName': o.driverName,
+        'driverPhone': o.driverPhone,
+        'driverPhoto': o.driverPhoto,
+        'driverPlate': o.plate,
+        'driverVehicle': o.vehicle,
+        'driverRating': double.parse(o.rating.toStringAsFixed(2)),
+        'driverAccount': o.account.toMap(),
+        'fare': price,
+        'acceptedAt': now,
+        'updatedAt': now,
+      });
+    });
+  }
+
   static Future<void> cancelTrip(String id, String by) => trips.doc(id).update({
         'status': TripStatus.cancelled,
         'cancelledBy': by,
@@ -210,30 +230,8 @@ class Db {
         'updatedAt': now,
       });
 
-  /// Rider pays a finished trip from their wallet. Fails if balance is low.
-  static Future<void> payWithWallet(Trip t, String uid) {
-    return _fs.runTransaction((tx) async {
-      final uRef = users.doc(uid);
-      final tRef = trips.doc(t.id);
-      final u = await tx.get(uRef);
-      final trip = await tx.get(tRef);
-      if (toB(trip.data()?['paid'])) return;
-      final bal = toD(u.data()?['wallet']);
-      if (bal < t.fare) throw Exception('Wallet balance is too low');
-      tx.update(uRef, {'wallet': bal - t.fare});
-      tx.update(tRef, {'paid': true, 'updatedAt': now});
-      tx.set(walletTx.doc(), {
-        'uid': uid,
-        'amount': -t.fare,
-        'type': 'trip',
-        'note': 'Trip to ${t.dropoff.label}',
-        'tripId': t.id,
-        'createdAt': now,
-      });
-    });
-  }
-
-  static Future<void> markCashPaid(String tripId) =>
+  /// Rider confirms they paid (cash handed over, or transfer sent).
+  static Future<void> markPaid(String tripId) =>
       trips.doc(tripId).update({'paid': true, 'updatedAt': now});
 
   static Future<void> rateTrip({
@@ -242,7 +240,6 @@ class Db {
     required List<String> tags,
     required String comment,
     required double tip,
-    required String uid,
   }) async {
     await trips.doc(trip.id).update({
       'rating': stars,
@@ -257,24 +254,17 @@ class Db {
         'ratingCount': FieldValue.increment(1),
       });
     }
-    if (tip > 0 && trip.payment == 'wallet') {
-      await _fs.runTransaction((tx) async {
-        final uRef = users.doc(uid);
-        final u = await tx.get(uRef);
-        final bal = toD(u.data()?['wallet']);
-        if (bal < tip) return;
-        tx.update(uRef, {'wallet': bal - tip});
-        tx.set(walletTx.doc(), {
-          'uid': uid,
-          'amount': -tip,
-          'type': 'tip',
-          'note': 'Tip for ${trip.driverName}',
-          'tripId': trip.id,
-          'createdAt': now,
-        });
-      });
-    }
   }
+
+  // ---------------- chat ----------------
+  static Stream<List<ChatMessage>> chatStream(String tripId) => messages(tripId)
+      .orderBy('createdAt')
+      .limitToLast(200)
+      .snapshots()
+      .map((q) => q.docs.map(ChatMessage.fromDoc).toList());
+
+  static Future<void> sendMessage(String tripId, String from, String text) =>
+      messages(tripId).add({'from': from, 'text': text, 'createdAt': now});
 
   // ---------------- trips: driver ----------------
   static Stream<List<Trip>> openRequests() => trips
@@ -293,27 +283,30 @@ class Db {
         return list;
       });
 
-  /// First driver to accept wins; others get an error.
-  static Future<void> acceptTrip(String tripId, DriverProfile d) {
-    return _fs.runTransaction((tx) async {
-      final ref = trips.doc(tripId);
-      final snap = await tx.get(ref);
-      if (toS(snap.data()?['status']) != TripStatus.requested) {
-        throw Exception('This ride was taken by another driver');
-      }
-      tx.update(ref, {
-        'status': TripStatus.accepted,
+  /// Driver sends (or updates) their price for an open request.
+  static Future<void> sendOffer({
+    required String tripId,
+    required DriverProfile d,
+    required double price,
+    required int etaMin,
+  }) =>
+      offers(tripId).doc(d.uid).set({
         'driverId': d.uid,
         'driverName': d.name,
         'driverPhone': d.phone,
-        'driverPlate': d.plate,
-        'driverVehicle': d.vehicle,
-        'driverRating': double.parse(d.rating.toStringAsFixed(2)),
-        'acceptedAt': now,
-        'updatedAt': now,
+        'driverPhoto': d.photo,
+        'vehicle': d.vehicle,
+        'plate': d.plate,
+        'rating': double.parse(d.rating.toStringAsFixed(2)),
+        'ratingCount': d.ratingCount,
+        'account': d.account.toMap(),
+        'price': price,
+        'etaMin': etaMin,
+        'createdAt': now,
       });
-    });
-  }
+
+  static Future<void> withdrawOffer(String tripId, String driverId) =>
+      offers(tripId).doc(driverId).delete();
 
   static Future<void> setTripStatus(String id, String status) {
     final stamp = switch (status) {
@@ -325,14 +318,13 @@ class Db {
     return trips.doc(id).update({'status': status, stamp: now, 'updatedAt': now});
   }
 
-  /// Driver finishes the ride. For cash trips the driver confirms the cash
-  /// was collected, which also marks the trip paid.
-  static Future<void> completeTrip(String id, {required bool cashCollected}) =>
+  /// Driver finishes the ride and confirms whether payment was received.
+  static Future<void> completeTrip(String id, {required bool paymentReceived}) =>
       trips.doc(id).update({
         'status': TripStatus.completed,
         'completedAt': now,
         'updatedAt': now,
-        if (cashCollected) 'paid': true,
+        if (paymentReceived) 'paid': true,
       });
 
   // ---------------- drivers ----------------
@@ -369,6 +361,7 @@ class Db {
         'online': false,
         'ratingSum': 0,
         'ratingCount': 0,
+        'commissionPaid': 0,
         'createdAt': now,
         'updatedAt': now,
       });
@@ -381,6 +374,10 @@ class Db {
       });
     }
   }
+
+  /// Approved drivers can update their payment account without re-review.
+  static Future<void> updateDriverAccount(String uid, PayAccount a) =>
+      drivers.doc(uid).update({'account': a.toMap(), 'updatedAt': now});
 
   static Future<void> setOnline(String uid, bool online, [LatLng? at]) =>
       drivers.doc(uid).update({
@@ -404,35 +401,12 @@ class Db {
         'reviewedAt': now,
       });
 
-  // ---------------- payouts ----------------
-  static Stream<List<Payout>> driverPayouts(String uid) => payouts
-          .where('driverId', isEqualTo: uid)
-          .limit(100)
-          .snapshots()
-          .map((q) {
-        final list = q.docs.map(Payout.fromDoc).toList();
-        list.sort((a, b) => (b.createdAt ?? DateTime(2100))
-            .compareTo(a.createdAt ?? DateTime(2100)));
-        return list;
+  /// Admin records commission the driver paid to TrustRide.
+  static Future<void> recordCommissionPayment(String uid, double amount) =>
+      drivers.doc(uid).update({
+        'commissionPaid': FieldValue.increment(amount),
+        'commissionPaidAt': now,
       });
-
-  static Stream<List<Payout>> allPayouts() =>
-      payouts.orderBy('createdAt', descending: true).limit(200).snapshots().map(
-          (q) => q.docs.map(Payout.fromDoc).toList());
-
-  static Future<void> requestPayout(DriverProfile d, double amount) =>
-      payouts.add({
-        'driverId': d.uid,
-        'driverName': d.name,
-        'amount': double.parse(amount.toStringAsFixed(2)),
-        'provider': d.payoutProvider,
-        'number': d.payoutNumber,
-        'status': 'requested',
-        'createdAt': now,
-      });
-
-  static Future<void> setPayoutStatus(String id, String status) =>
-      payouts.doc(id).update({'status': status, 'processedAt': now});
 
   // ---------------- SOS ----------------
   static Future<void> raiseSos({

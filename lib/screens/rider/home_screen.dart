@@ -77,32 +77,25 @@ class _HomeTabState extends State<HomeTab> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: Row(
               children: [
-                CircleIconButton(
-                  icon: PhosphorIconsBold.list,
-                  label: 'Account',
-                  background: Colors.white,
-                  shadow: true,
-                  onTap: () => widget.onOpenTab(3),
+                Pressable(
+                  onTap: () => widget.onOpenTab(2),
+                  semanticLabel: 'Account',
+                  child: Container(
+                    decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: TR.shadow()),
+                    child: Avatar(p?.initials ?? '?', photo: p?.photo ?? '', size: 46,
+                        bg: Colors.white, ring: true),
+                  ),
                 ),
                 const Spacer(),
-                Pressable(
+                const LogoMark(size: 46),
+                const Spacer(),
+                CircleIconButton(
+                  icon: PhosphorIconsFill.shieldCheck,
+                  label: 'Safety centre',
+                  color: TR.green,
+                  background: Colors.white,
+                  shadow: true,
                   onTap: () => Navigator.of(context).pushNamed(R.safety),
-                  semanticLabel: 'Safety centre',
-                  child: Container(
-                    height: 46,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(23),
-                      boxShadow: TR.shadow(),
-                    ),
-                    child: Row(children: [
-                      const Icon(PhosphorIconsFill.shieldCheck,
-                          color: TR.green, size: 20),
-                      const SizedBox(width: 6),
-                      Text('Safety', style: TS.label.copyWith(color: TR.green)),
-                    ]),
-                  ),
                 ),
                 const SizedBox(width: 10),
                 CircleIconButton(

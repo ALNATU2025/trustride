@@ -40,7 +40,7 @@ class _DriverShellState extends State<DriverShell> {
           NavItem(PhosphorIconsRegular.chartBar, PhosphorIconsFill.chartBar,
               'Earnings'),
           NavItem(PhosphorIconsRegular.identificationCard,
-              PhosphorIconsFill.identificationCard, 'Documents'),
+              PhosphorIconsFill.identificationCard, 'Profile'),
         ],
       ),
     );

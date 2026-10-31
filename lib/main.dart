@@ -6,6 +6,8 @@ import 'core/app_state.dart';
 import 'core/routes.dart';
 import 'core/theme.dart';
 import 'firebase_options.dart';
+import 'screens/lock_screen.dart';
+import 'services/app_lock.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +24,7 @@ Future<void> main() async {
     return;
   }
 
+  await AppLock.instance.load();
   final state = AppState()..start();
   runApp(TrustRideApp(state: state));
 }
@@ -40,6 +43,7 @@ class TrustRideApp extends StatelessWidget {
         theme: buildTheme(),
         initialRoute: R.splash,
         onGenerateRoute: R.generate,
+        builder: (context, child) => LockGate(child: child ?? const SizedBox()),
       ),
     );
   }

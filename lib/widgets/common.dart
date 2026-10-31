@@ -1,6 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import '../core/icons.dart';
+import '../services/photo_service.dart';
 
 import '../core/theme.dart';
 
@@ -223,21 +226,40 @@ class TRBack extends StatelessWidget {
       );
 }
 
+/// Round avatar showing a profile photo (base64) or initials.
 class Avatar extends StatelessWidget {
   const Avatar(this.initials,
       {super.key,
+      this.photo = '',
       this.size = 48,
       this.bg = const Color(0xFFC9D6E3),
       this.fg = TR.navy,
       this.ring = false});
   final String initials;
+  final String photo;
   final double size;
   final Color bg;
   final Color fg;
   final bool ring;
 
+  static final Map<int, Uint8List> _cache = {};
+
+  static Uint8List? _bytes(String b64) {
+    if (b64.isEmpty) return null;
+    final key = b64.hashCode;
+    final hit = _cache[key];
+    if (hit != null) return hit;
+    final bytes = PhotoService.decode(b64);
+    if (bytes != null) {
+      if (_cache.length > 60) _cache.remove(_cache.keys.first);
+      _cache[key] = bytes;
+    }
+    return bytes;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bytes = _bytes(photo);
     return Container(
       width: size,
       height: size,
@@ -251,14 +273,106 @@ class Avatar extends StatelessWidget {
           shape: BoxShape.circle,
           color: bg,
           border: ring ? Border.all(color: Colors.white, width: 2) : null,
+          image: bytes == null
+              ? null
+              : DecorationImage(image: MemoryImage(bytes), fit: BoxFit.cover),
         ),
         alignment: Alignment.center,
-        child: Text(initials,
-            style: TS.label
-                .copyWith(color: fg, fontSize: size * 0.32, fontWeight: FontWeight.w800)),
+        child: bytes != null
+            ? null
+            : Text(initials,
+                style: TS.label.copyWith(
+                    color: fg, fontSize: size * 0.32, fontWeight: FontWeight.w800)),
       ),
     );
   }
+}
+
+/// The TrustRide emblem on a white badge, so it stays visible on any
+/// background. Shown in the header of every screen.
+class LogoMark extends StatelessWidget {
+  const LogoMark({super.key, this.size = 44, this.shadow = true});
+  final double size;
+  final bool shadow;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        label: 'TrustRide',
+        image: true,
+        child: Container(
+          height: size,
+          padding: EdgeInsets.symmetric(horizontal: size * 0.18, vertical: size * 0.14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(size * 0.32),
+            boxShadow: shadow ? TR.shadow(0.8) : null,
+          ),
+          child: Image.asset('assets/images/logo_mark.png',
+              fit: BoxFit.contain, filterQuality: FilterQuality.medium),
+        ),
+      );
+}
+
+/// Title row used at the top of tab screens: logo, title, optional action.
+class ScreenTitle extends StatelessWidget {
+  const ScreenTitle(this.title, {super.key, this.subtitle, this.trailing, this.back = false});
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final bool back;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        if (back) ...[const TRBack(), const SizedBox(width: 12)],
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: TS.h2),
+              if (subtitle != null) Text(subtitle!, style: TS.small),
+            ],
+          ),
+        ),
+        if (trailing != null) ...[trailing!, const SizedBox(width: 10)],
+        const LogoMark(size: 42),
+      ]);
+}
+
+/// Bottom sheet to take or choose a photo. Returns base64 JPEG or null.
+Future<String?> pickPhotoSheet(BuildContext context) async {
+  final camera = await showModalBottomSheet<bool>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (c) => BottomPanel(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SheetHandle(),
+          const SizedBox(height: 16),
+          Text('Profile photo', style: TS.h3),
+          const SizedBox(height: 4),
+          Text('A clear photo of your face helps drivers and riders recognise you.',
+              style: TS.small),
+          const SizedBox(height: 14),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const IconBubble(PhosphorIconsFill.camera, color: TR.green, bg: TR.greenTint),
+            title: Text('Take a photo', style: TS.label),
+            onTap: () => Navigator.pop(c, true),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const IconBubble(PhosphorIconsFill.image),
+            title: Text('Choose from gallery', style: TS.label),
+            onTap: () => Navigator.pop(c, false),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (camera == null) return null;
+  return PhotoService.pick(camera: camera);
 }
 
 enum PillKind { success, warning, danger, info, neutral }

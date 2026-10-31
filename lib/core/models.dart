@@ -204,6 +204,12 @@ class Contact {
   }
 }
 
+String initialsOf(String name) {
+  final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+  final s = parts.take(2).map((p) => p[0]).join();
+  return s.isEmpty ? '?' : s.toUpperCase();
+}
+
 class AppUser {
   const AppUser({
     required this.uid,
@@ -212,13 +218,12 @@ class AppUser {
     required this.email,
     required this.role,
     required this.language,
-    required this.wallet,
+    required this.photo,
     required this.contacts,
     required this.home,
     required this.work,
     required this.requirePin,
     required this.shareNight,
-    required this.preferFemale,
   });
 
   final String uid;
@@ -227,21 +232,18 @@ class AppUser {
   final String email;
   final String role; // rider | admin
   final String language;
-  final double wallet;
+
+  /// Small JPEG as base64 (kept under ~60 KB), empty if none.
+  final String photo;
   final List<Contact> contacts;
   final Place? home;
   final Place? work;
   final bool requirePin;
   final bool shareNight;
-  final bool preferFemale;
 
   bool get isAdmin => role == 'admin';
   String get firstName => name.trim().split(' ').first;
-  String get initials {
-    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    final s = parts.take(2).map((p) => p[0]).join();
-    return s.isEmpty ? '?' : s.toUpperCase();
-  }
+  String get initials => initialsOf(name);
 
   factory AppUser.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
     final m = d.data() ?? {};
@@ -254,7 +256,7 @@ class AppUser {
       email: toS(m['email']),
       role: toS(m['role'], 'rider'),
       language: toS(m['language'], 'English'),
-      wallet: toD(m['wallet']),
+      photo: toS(m['photo']),
       contacts: (m['contacts'] is List)
           ? (m['contacts'] as List).map(Contact.fromMap).toList()
           : const [],
@@ -262,7 +264,42 @@ class AppUser {
       work: Place.fromMap(places['work']),
       requirePin: toB(settings['requirePin'], true),
       shareNight: toB(settings['shareNight'], false),
-      preferFemale: toB(settings['preferFemale'], false),
+    );
+  }
+}
+
+/// Where riders send money when they pay a driver by transfer.
+class PayAccount {
+  const PayAccount({
+    required this.provider,
+    required this.accountName,
+    required this.accountNumber,
+    required this.bankName,
+  });
+
+  /// Orange Money | Afrimoney | Bank
+  final String provider;
+  final String accountName;
+  final String accountNumber;
+  final String bankName;
+
+  bool get isEmpty => accountNumber.trim().isEmpty;
+  String get title => provider == 'Bank' && bankName.isNotEmpty ? bankName : provider;
+
+  Map<String, dynamic> toMap() => {
+        'provider': provider,
+        'accountName': accountName,
+        'accountNumber': accountNumber,
+        'bankName': bankName,
+      };
+
+  static PayAccount fromMap(dynamic raw) {
+    final m = asMap(raw);
+    return PayAccount(
+      provider: toS(m['provider'], 'Orange Money'),
+      accountName: toS(m['accountName']),
+      accountNumber: toS(m['accountNumber']),
+      bankName: toS(m['bankName']),
     );
   }
 }
@@ -272,49 +309,49 @@ class DriverProfile {
     required this.uid,
     required this.name,
     required this.phone,
+    required this.photo,
     required this.vehicleType,
     required this.vehicle,
     required this.plate,
     required this.nin,
     required this.licence,
     required this.insurance,
-    required this.payoutProvider,
-    required this.payoutNumber,
+    required this.account,
     required this.status,
     required this.rejectReason,
     required this.online,
     required this.location,
     required this.ratingSum,
     required this.ratingCount,
+    required this.commissionPaid,
     required this.createdAt,
   });
 
   final String uid;
   final String name;
   final String phone;
+  final String photo;
   final String vehicleType;
   final String vehicle;
   final String plate;
   final String nin;
   final String licence;
   final String insurance;
-  final String payoutProvider;
-  final String payoutNumber;
+  final PayAccount account;
   final String status; // pending | approved | rejected | suspended
   final String rejectReason;
   final bool online;
   final LatLng? location;
   final double ratingSum;
   final int ratingCount;
+
+  /// Total commission the driver has paid TrustRide (recorded by admins).
+  final double commissionPaid;
   final DateTime? createdAt;
 
   bool get approved => status == 'approved';
   double get rating => ratingCount == 0 ? 5.0 : ratingSum / ratingCount;
-  String get initials {
-    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    final s = parts.take(2).map((p) => p[0]).join();
-    return s.isEmpty ? '?' : s.toUpperCase();
-  }
+  String get initials => initialsOf(name);
 
   factory DriverProfile.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
     final m = d.data() ?? {};
@@ -323,20 +360,21 @@ class DriverProfile {
       uid: d.id,
       name: toS(m['name']),
       phone: toS(m['phone']),
+      photo: toS(m['photo']),
       vehicleType: toS(m['vehicleType'], 'car'),
       vehicle: toS(m['vehicle']),
       plate: toS(m['plate']),
       nin: toS(m['nin']),
       licence: toS(m['licence']),
       insurance: toS(m['insurance']),
-      payoutProvider: toS(m['payoutProvider'], 'Orange Money'),
-      payoutNumber: toS(m['payoutNumber']),
+      account: PayAccount.fromMap(m['account']),
       status: toS(m['status'], 'pending'),
       rejectReason: toS(m['rejectReason']),
       online: toB(m['online']),
       location: loc is GeoPoint ? LatLng(loc.latitude, loc.longitude) : null,
       ratingSum: toD(m['ratingSum']),
       ratingCount: toI(m['ratingCount']),
+      commissionPaid: toD(m['commissionPaid']),
       createdAt: toDate(m['createdAt']),
     );
   }
@@ -358,18 +396,25 @@ class Trip {
     required this.riderId,
     required this.riderName,
     required this.riderPhone,
+    required this.riderPhoto,
+    required this.passengerName,
+    required this.passengerPhone,
+    required this.note,
     required this.driverId,
     required this.driverName,
     required this.driverPhone,
+    required this.driverPhoto,
     required this.driverPlate,
     required this.driverVehicle,
     required this.driverRating,
+    required this.driverAccount,
     required this.rideType,
     required this.rideName,
     required this.pickup,
     required this.dropoff,
     required this.distanceKm,
     required this.durationMin,
+    required this.suggestedFare,
     required this.fare,
     required this.payment,
     required this.status,
@@ -388,20 +433,35 @@ class Trip {
   final String riderId;
   final String riderName;
   final String riderPhone;
+  final String riderPhoto;
+
+  /// Someone else being picked up (empty when the rider rides themself).
+  final String passengerName;
+  final String passengerPhone;
+
+  /// Note for the driver, e.g. "Blue gate opposite the mosque".
+  final String note;
   final String driverId;
   final String driverName;
   final String driverPhone;
+  final String driverPhoto;
   final String driverPlate;
   final String driverVehicle;
   final double driverRating;
+  final PayAccount driverAccount;
   final String rideType;
   final String rideName;
   final Place pickup;
   final Place dropoff;
   final double distanceKm;
   final double durationMin;
+
+  /// TrustRide's recommended fare for this route.
+  final double suggestedFare;
+
+  /// Rider's offer while searching; the agreed price once a driver is chosen.
   final double fare;
-  final String payment; // cash | wallet
+  final String payment; // cash | transfer
   final String status;
   final String pin;
   final bool requirePin;
@@ -415,12 +475,9 @@ class Trip {
 
   bool get isActive => TripStatus.active.contains(status);
   bool get hasDriver => driverId.isNotEmpty;
-  String get driverInitials {
-    final parts =
-        driverName.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    final s = parts.take(2).map((p) => p[0]).join();
-    return s.isEmpty ? '?' : s.toUpperCase();
-  }
+  bool get forSomeoneElse => passengerName.isNotEmpty;
+  String get driverInitials => initialsOf(driverName);
+  String get paymentLabel => payment == 'transfer' ? 'Transfer to driver' : 'Cash';
 
   factory Trip.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
     final m = d.data() ?? {};
@@ -431,18 +488,25 @@ class Trip {
       riderId: toS(m['riderId']),
       riderName: toS(m['riderName']),
       riderPhone: toS(m['riderPhone']),
+      riderPhoto: toS(m['riderPhoto']),
+      passengerName: toS(m['passengerName']),
+      passengerPhone: toS(m['passengerPhone']),
+      note: toS(m['note']),
       driverId: toS(m['driverId']),
       driverName: toS(m['driverName']),
       driverPhone: toS(m['driverPhone']),
+      driverPhoto: toS(m['driverPhoto']),
       driverPlate: toS(m['driverPlate']),
       driverVehicle: toS(m['driverVehicle']),
       driverRating: toD(m['driverRating'], 5),
+      driverAccount: PayAccount.fromMap(m['driverAccount']),
       rideType: toS(m['rideType'], 'car'),
       rideName: toS(m['rideName'], 'TrustRide'),
       pickup: Place.fromMap(m['pickup']) ?? nowhere,
       dropoff: Place.fromMap(m['dropoff']) ?? nowhere,
       distanceKm: toD(m['distanceKm']),
       durationMin: toD(m['durationMin']),
+      suggestedFare: toD(m['suggestedFare'], toD(m['fare'])),
       fare: toD(m['fare']),
       payment: toS(m['payment'], 'cash'),
       status: toS(m['status'], TripStatus.requested),
@@ -459,53 +523,68 @@ class Trip {
   }
 }
 
-class WalletTx {
-  const WalletTx(this.id, this.amount, this.type, this.note, this.createdAt);
-  final String id;
-  final double amount;
-  final String type; // topup | trip | tip | adjust
-  final String note;
+/// A driver's price for an open trip request (trips/{id}/offers/{driverId}).
+class Offer {
+  const Offer({
+    required this.driverId,
+    required this.driverName,
+    required this.driverPhone,
+    required this.driverPhoto,
+    required this.vehicle,
+    required this.plate,
+    required this.rating,
+    required this.ratingCount,
+    required this.account,
+    required this.price,
+    required this.etaMin,
+    required this.createdAt,
+  });
+
+  final String driverId;
+  final String driverName;
+  final String driverPhone;
+  final String driverPhoto;
+  final String vehicle;
+  final String plate;
+  final double rating;
+  final int ratingCount;
+  final PayAccount account;
+  final double price;
+  final int etaMin;
   final DateTime? createdAt;
 
-  factory WalletTx.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
+  String get initials => initialsOf(driverName);
+
+  factory Offer.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
     final m = d.data() ?? {};
-    return WalletTx(d.id, toD(m['amount']), toS(m['type']), toS(m['note']),
-        toDate(m['createdAt']));
+    return Offer(
+      driverId: d.id,
+      driverName: toS(m['driverName']),
+      driverPhone: toS(m['driverPhone']),
+      driverPhoto: toS(m['driverPhoto']),
+      vehicle: toS(m['vehicle']),
+      plate: toS(m['plate']),
+      rating: toD(m['rating'], 5),
+      ratingCount: toI(m['ratingCount']),
+      account: PayAccount.fromMap(m['account']),
+      price: toD(m['price']),
+      etaMin: toI(m['etaMin'], 5),
+      createdAt: toDate(m['createdAt']),
+    );
   }
 }
 
-class Payout {
-  const Payout({
-    required this.id,
-    required this.driverId,
-    required this.driverName,
-    required this.amount,
-    required this.provider,
-    required this.number,
-    required this.status,
-    required this.createdAt,
-  });
+/// In-app chat between rider and driver (trips/{id}/messages/{id}).
+class ChatMessage {
+  const ChatMessage(this.id, this.from, this.text, this.createdAt);
   final String id;
-  final String driverId;
-  final String driverName;
-  final double amount;
-  final String provider;
-  final String number;
-  final String status; // requested | paid | rejected
+  final String from; // uid
+  final String text;
   final DateTime? createdAt;
 
-  factory Payout.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
+  factory ChatMessage.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
     final m = d.data() ?? {};
-    return Payout(
-      id: d.id,
-      driverId: toS(m['driverId']),
-      driverName: toS(m['driverName']),
-      amount: toD(m['amount']),
-      provider: toS(m['provider']),
-      number: toS(m['number']),
-      status: toS(m['status'], 'requested'),
-      createdAt: toDate(m['createdAt']),
-    );
+    return ChatMessage(d.id, toS(m['from']), toS(m['text']), toDate(m['createdAt']));
   }
 }
 

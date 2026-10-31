@@ -148,7 +148,7 @@ class _AdminDriversState extends State<AdminDrivers> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Row(children: [
-                        Avatar(list[i].initials, size: 40),
+                        Avatar(list[i].initials, photo: list[i].photo, size: 40),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
@@ -202,7 +202,7 @@ class _AdminDriversState extends State<AdminDrivers> {
       ('NIN', d.nin),
       ('Licence no.', d.licence),
       ('Insurance', d.insurance.isEmpty ? '—' : d.insurance),
-      ('Payouts', '${d.payoutProvider} · ${d.payoutNumber}'),
+      ('Paid by riders at', d.account.isEmpty ? '—' : '${d.account.title} · ${d.account.accountNumber} · ${d.account.accountName}'),
       ('Rating', d.ratingCount == 0 ? 'No ratings yet' : '${d.rating.toStringAsFixed(2)} (${d.ratingCount})'),
       ('Applied', dateLabel(d.createdAt)),
       if (d.rejectReason.isNotEmpty) ('Reason given', d.rejectReason),
@@ -213,7 +213,7 @@ class _AdminDriversState extends State<AdminDrivers> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Avatar(d.initials, size: 64, ring: true),
+            Avatar(d.initials, photo: d.photo, size: 72, ring: true),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -241,6 +241,10 @@ class _AdminDriversState extends State<AdminDrivers> {
               ]),
             ),
           const SizedBox(height: 14),
+          if (d.status == 'approved' || d.status == 'suspended') ...[
+            _CommissionBox(driver: d),
+            const SizedBox(height: 14),
+          ],
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(color: TR.amberTint, borderRadius: BorderRadius.circular(12)),
@@ -286,5 +290,99 @@ class _AdminDriversState extends State<AdminDrivers> {
         ],
       ),
     ).animate().fadeIn(duration: 250.ms);
+  }
+}
+
+/// Commission owed by a driver (from their completed trips) and a button to
+/// record payments they make to TrustRide.
+class _CommissionBox extends StatefulWidget {
+  const _CommissionBox({required this.driver});
+  final DriverProfile driver;
+  @override
+  State<_CommissionBox> createState() => _CommissionBoxState();
+}
+
+class _CommissionBoxState extends State<_CommissionBox> {
+  late Stream<List<Trip>> _trips = Db.driverTrips(widget.driver.uid);
+
+  @override
+  void didUpdateWidget(covariant _CommissionBox old) {
+    super.didUpdateWidget(old);
+    if (old.driver.uid != widget.driver.uid) _trips = Db.driverTrips(widget.driver.uid);
+  }
+
+  Future<void> _record(double owed) async {
+    final ctrl = TextEditingController(text: owed > 0 ? owed.round().toString() : '');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Text('Record commission payment', style: TS.h3),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(prefixText: 'Le ', hintText: 'Amount received'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: Text('Cancel', style: TS.label.copyWith(color: TR.muted))),
+          TextButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: Text('Record', style: TS.label.copyWith(color: TR.green))),
+        ],
+      ),
+    );
+    final amt = double.tryParse(ctrl.text.trim());
+    ctrl.dispose();
+    if (ok != true || amt == null || amt <= 0) return;
+    try {
+      await Db.recordCommissionPayment(widget.driver.uid, amt);
+      if (mounted) showToast(context, 'Recorded ${TR.le(amt)} from ${widget.driver.name}');
+    } catch (e) {
+      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppScope.of(context).config.commission;
+    return StreamBuilder<List<Trip>>(
+      stream: _trips,
+      builder: (context, snap) {
+        final done = (snap.data ?? const <Trip>[]).where((t) => t.status == TripStatus.completed);
+        final gross = done.fold<double>(0, (a, t) => a + t.fare);
+        final owed = gross * c - widget.driver.commissionPaid;
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: owed > 0.5 ? TR.amberTint : TR.greenTint,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${done.length} trips · ${TR.le(gross)} fares', style: TS.small),
+                Text(owed > 0.5 ? 'Commission owed: ${TR.le(owed)}' : 'Commission paid up',
+                    style: TS.label.copyWith(color: owed > 0.5 ? TR.amberInk : const Color(0xFF1F6B2E))),
+                Text('Paid so far: ${TR.le(widget.driver.commissionPaid)}', style: TS.small.copyWith(fontSize: 12)),
+              ]),
+              TRButton(
+                label: 'Record payment',
+                icon: PhosphorIconsBold.plus,
+                expand: false,
+                height: 42,
+                onPressed: () => _record(owed),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

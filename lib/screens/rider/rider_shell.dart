@@ -5,7 +5,6 @@ import '../../widgets/nav_bar.dart';
 import 'account_screen.dart';
 import 'history_screen.dart';
 import 'home_screen.dart';
-import 'wallet_screen.dart';
 
 class RiderShell extends StatefulWidget {
   const RiderShell({super.key, this.initialTab = 0});
@@ -39,7 +38,6 @@ class _RiderShellState extends State<RiderShell> {
           child: switch (_index) {
             0 => HomeTab(onOpenTab: _go),
             1 => const HistoryTab(),
-            2 => const WalletTab(),
             _ => const AccountTab(),
           },
         ),
@@ -51,7 +49,6 @@ class _RiderShellState extends State<RiderShell> {
           NavItem(PhosphorIconsRegular.house, PhosphorIconsFill.house, 'Home'),
           NavItem(PhosphorIconsRegular.clockCounterClockwise,
               PhosphorIconsFill.clockCounterClockwise, 'Trips'),
-          NavItem(PhosphorIconsRegular.wallet, PhosphorIconsFill.wallet, 'Wallet'),
           NavItem(PhosphorIconsRegular.userCircle, PhosphorIconsFill.userCircle,
               'Account'),
         ],

@@ -100,11 +100,7 @@ class _SafetyScreenState extends State<SafetyScreen>
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
           children: [
-            Row(children: [
-              const TRBack(),
-              const SizedBox(width: 12),
-              Text('Safety centre', style: TS.h3.copyWith(fontSize: 22)),
-            ]),
+            const ScreenTitle('Safety centre', back: true),
             const SizedBox(height: 18),
             GestureDetector(
               onLongPressStart: (_) {

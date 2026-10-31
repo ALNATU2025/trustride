@@ -19,8 +19,8 @@ android {
         applicationId = "sl.trustride.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // Firebase Auth needs Android 6.0 (API 23) or newer.
-        minSdk = maxOf(23, flutter.minSdkVersion)
+        // Firebase Auth and fingerprint unlock need Android 7.0 (API 24) or newer.
+        minSdk = maxOf(24, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -43,4 +43,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // AppCompat theme for the fingerprint dialog on older Android versions.
+    implementation("androidx.appcompat:appcompat:1.7.0")
 }

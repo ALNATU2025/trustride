@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../services/app_lock.dart';
 import '../services/auth_service.dart';
 import '../services/db.dart';
 import '../services/geo_service.dart';
@@ -100,6 +101,7 @@ class AppState extends ChangeNotifier {
         await Db.setOnline(d.uid, false);
       } catch (_) {}
     }
+    await AppLock.instance.disable();
     await AuthService.signOut();
   }
 
@@ -110,13 +112,27 @@ class AppState extends ChangeNotifier {
   Place? dropoff;
   RouteInfo? route;
   String rideId = 'car';
-  String payment = 'cash';
+  String payment = 'cash'; // cash | transfer
   String? currentTripId;
+
+  /// The rider's own price; null means "use the recommended fare".
+  double? offer;
+  String note = '';
+  String passengerName = '';
+  String passengerPhone = '';
 
   RideType get ride => config.ride(rideId);
   double fareFor(RideType r) =>
       route == null ? 0 : r.fareFor(route!.distanceKm, route!.durationMin);
-  double get fare => fareFor(ride);
+
+  /// TrustRide's recommended fare for the selected ride.
+  double get suggested => fareFor(ride);
+
+  /// What the rider will offer drivers.
+  double get fare => offer ?? suggested;
+
+  /// Riders can go down to 70% of the recommended fare.
+  double get minOffer => (suggested * 0.7).roundToDouble();
 
   Future<void> locate({bool resetPickup = false}) async {
     locationError = await LocationService.ensurePermission();
@@ -143,11 +159,25 @@ class AppState extends ChangeNotifier {
   void setDropoff(Place p) {
     dropoff = p;
     route = null;
+    offer = null;
     notifyListeners();
   }
 
   void setRide(String id) {
     rideId = id;
+    offer = null;
+    notifyListeners();
+  }
+
+  void setOffer(double? v) {
+    offer = v == null ? null : v.roundToDouble();
+    notifyListeners();
+  }
+
+  void setTripDetails({String? note, String? passengerName, String? passengerPhone}) {
+    if (note != null) this.note = note;
+    if (passengerName != null) this.passengerName = passengerName;
+    if (passengerPhone != null) this.passengerPhone = passengerPhone;
     notifyListeners();
   }
 
@@ -168,21 +198,36 @@ class AppState extends ChangeNotifier {
     if (p == null || a == null || b == null || r == null) {
       throw 'Choose a pickup and destination first.';
     }
-    if (payment == 'wallet' && p.wallet < fare) {
-      throw 'Your wallet balance is too low for this ride.';
+    if (fare < minOffer) {
+      throw 'Your price is too low. The minimum is ${minOffer.round()} Le.';
     }
-    final id = await Db.requestTrip(
+    final id = await Db.guard(Db.requestTrip(
       rider: p,
       ride: ride,
       pickup: a,
       dropoff: b,
       route: r,
-      fare: fare,
+      suggestedFare: suggested,
+      offer: fare,
       payment: payment,
-    );
+      note: note.trim(),
+      passengerName: passengerName.trim(),
+      passengerPhone: passengerPhone.trim(),
+    ));
     currentTripId = id;
     notifyListeners();
     return id;
+  }
+
+  /// Book the same trip again (from history).
+  void rebookFrom(Trip t) {
+    dropoff = t.dropoff;
+    rideId = config.enabledRides.any((r) => r.id == t.rideType)
+        ? t.rideType
+        : (config.enabledRides.isEmpty ? rideId : config.enabledRides.first.id);
+    route = null;
+    offer = null;
+    notifyListeners();
   }
 
   void setCurrentTrip(String? id) {
@@ -194,6 +239,10 @@ class AppState extends ChangeNotifier {
     currentTripId = null;
     dropoff = null;
     route = null;
+    offer = null;
+    note = '';
+    passengerName = '';
+    passengerPhone = '';
     notifyListeners();
   }
 

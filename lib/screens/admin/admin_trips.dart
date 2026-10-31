@@ -71,7 +71,7 @@ class TripTable extends StatelessWidget {
                     cell(3, Text('${t.pickup.label} → ${t.dropoff.label}',
                         maxLines: 1, overflow: TextOverflow.ellipsis, style: small)),
                     cell(4, Text(t.rideName, style: strong)),
-                    cell(5, Text(t.payment == 'wallet' ? 'Wallet' : 'Cash', style: small)),
+                    cell(5, Text(t.payment == 'transfer' ? 'Transfer' : 'Cash', style: small)),
                     cell(6, Text(TR.le(t.fare), style: strong)),
                     cell(7, Align(
                         alignment: Alignment.centerLeft,
@@ -107,7 +107,10 @@ void showTripDetails(BuildContext context, Trip t) {
               ('From', '${t.pickup.label}, ${t.pickup.address}'),
               ('To', '${t.dropoff.label}, ${t.dropoff.address}'),
               ('Ride', '${t.rideName} · ${t.distanceKm.toStringAsFixed(1)} km · ${t.durationMin.round()} min'),
-              ('Fare', '${TR.le(t.fare, decimals: true)} · ${t.payment} · ${t.paid ? 'paid' : 'not paid'}'),
+              ('Fare', '${TR.le(t.fare, decimals: true)} · ${t.paymentLabel} · ${t.paid ? 'paid' : 'not paid'}'),
+              if (t.forSomeoneElse) ('Passenger', '${t.passengerName} · ${t.passengerPhone}'),
+              if (t.note.isNotEmpty) ('Note', t.note),
+              ('Suggested', TR.le(t.suggestedFare)),
               ('Tip / rating', '${TR.le(t.tip)} · ${t.rating == null ? 'not rated' : '${t.rating}★'}'),
               if (t.cancelledBy.isNotEmpty) ('Cancelled by', t.cancelledBy),
             ])
@@ -147,10 +150,9 @@ class AdminTrips extends StatefulWidget {
 
 class _AdminTripsState extends State<AdminTrips> {
   late final Stream<List<Trip>> _trips = Db.recentTrips(limit: 500);
-  late final Stream<List<Payout>> _payouts = Db.allPayouts();
   String _filter = 'All';
   String _q = '';
-  static const _filters = ['All', 'Active', 'Completed', 'Unpaid', 'Cancelled', 'Cash', 'Wallet', 'SOS'];
+  static const _filters = ['All', 'Active', 'Completed', 'Unpaid', 'Cancelled', 'Cash', 'Transfer', 'SOS'];
 
   bool _match(Trip t) {
     final ok = switch (_filter) {
@@ -159,7 +161,7 @@ class _AdminTripsState extends State<AdminTrips> {
       'Unpaid' => t.status == TripStatus.completed && !t.paid,
       'Cancelled' => t.status == TripStatus.cancelled,
       'Cash' => t.payment == 'cash',
-      'Wallet' => t.payment == 'wallet',
+      'Transfer' => t.payment == 'transfer',
       'SOS' => t.sos,
       _ => true,
     };
@@ -174,106 +176,14 @@ class _AdminTripsState extends State<AdminTrips> {
         t.driverPlate.toLowerCase().contains(q);
   }
 
-  Future<void> _payout(Payout p, String status) async {
-    if (status == 'paid') {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (c) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          title: Text('Mark ${TR.le(p.amount, decimals: true)} as paid?', style: TS.h3),
-          content: Text(
-              'Send the money to ${p.driverName} on ${p.provider} ${p.number} first, then confirm here.',
-              style: TS.body),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(c, false),
-                child: Text('Cancel', style: TS.label.copyWith(color: TR.muted))),
-            TextButton(
-                onPressed: () => Navigator.pop(c, true),
-                child: Text('I’ve paid', style: TS.label.copyWith(color: TR.green))),
-          ],
-        ),
-      );
-      if (ok != true) return;
-    }
-    try {
-      await Db.setPayoutStatus(p.id, status);
-      if (mounted) showToast(context, status == 'paid' ? 'Payout marked paid' : 'Payout rejected');
-    } catch (e) {
-      if (mounted) showToast(context, errorText(e), icon: PhosphorIconsFill.warning);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = AppScope.of(context).config.commission;
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        const AdminHeader(title: 'Trips & payouts', subtitle: 'Latest 500 trips · live'),
+        const AdminHeader(title: 'Trips', subtitle: 'Latest 500 trips · live'),
         const SizedBox(height: 20),
-        StreamBuilder<List<Payout>>(
-          stream: _payouts,
-          builder: (context, snap) {
-            final pending = (snap.data ?? const <Payout>[])
-                .where((p) => p.status == 'requested')
-                .toList();
-            return AdminCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Expanded(child: Text('Cash-out requests', style: TS.h3)),
-                    Pill('${pending.length} waiting',
-                        kind: pending.isEmpty ? PillKind.neutral : PillKind.warning),
-                  ]),
-                  const SizedBox(height: 10),
-                  if (pending.isEmpty)
-                    Text('No drivers are waiting for a payout.', style: TS.small)
-                  else
-                    for (final p in pending)
-                      Container(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        decoration: const BoxDecoration(
-                            border: Border(top: BorderSide(color: Color(0xFFEEF1F5)))),
-                        child: Wrap(
-                          spacing: 12,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          alignment: WrapAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('${p.driverName} · ${TR.le(p.amount, decimals: true)}',
-                                    style: TS.label),
-                                Text('${p.provider} ${p.number} · ${timeAgo(p.createdAt)}',
-                                    style: TS.small.copyWith(fontSize: 12)),
-                              ],
-                            ),
-                            Wrap(spacing: 8, children: [
-                              TRButton(
-                                  label: 'Reject',
-                                  kind: BtnKind.outline,
-                                  expand: false,
-                                  height: 40,
-                                  onPressed: () => _payout(p, 'rejected')),
-                              TRButton(
-                                  label: 'Mark paid',
-                                  expand: false,
-                                  height: 40,
-                                  onPressed: () => _payout(p, 'paid')),
-                            ]),
-                          ],
-                        ),
-                      ),
-                ],
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 16),
         StreamBuilder<List<Trip>>(
           stream: _trips,
           builder: (context, snap) {
@@ -288,9 +198,6 @@ class _AdminTripsState extends State<AdminTrips> {
             final rows = all.where(_match).toList();
             final done = all.where((t) => t.status == TripStatus.completed);
             final gross = done.fold<double>(0, (a, t) => a + t.fare);
-            final cashOwed = done
-                .where((t) => t.payment == 'cash')
-                .fold<double>(0, (a, t) => a + t.fare * c);
             return AdminCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -299,7 +206,6 @@ class _AdminTripsState extends State<AdminTrips> {
                     Text('Completed: ${done.length}', style: TS.label),
                     Text('Bookings: ${TR.le(gross)}', style: TS.label),
                     Text('Commission: ${TR.le(gross * c)}', style: TS.label),
-                    Text('Cash commission owed by drivers: ${TR.le(cashOwed)}', style: TS.label),
                   ]),
                   const SizedBox(height: 14),
                   SizedBox(

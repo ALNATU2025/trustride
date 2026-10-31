@@ -56,6 +56,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 height: 48,
                 child: Row(
                   children: [
+                    const LogoMark(size: 44),
+                    const SizedBox(width: 10),
                     const BrandWord(size: 18),
                     const Spacer(),
                     AnimatedOpacity(

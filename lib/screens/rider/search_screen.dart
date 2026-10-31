@@ -146,6 +146,8 @@ class _SearchScreenState extends State<SearchScreen> {
                         ? 'Set ${widget.mode == 'home' ? 'Home' : 'Work'} address'
                         : 'Plan your ride',
                     style: TS.h3.copyWith(fontSize: 20)),
+                const Spacer(),
+                const LogoMark(size: 42),
               ]),
             ),
             Padding(

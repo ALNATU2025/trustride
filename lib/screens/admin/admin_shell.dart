@@ -11,7 +11,6 @@ import '../../widgets/common.dart';
 import 'admin_drivers.dart';
 import 'admin_overview.dart';
 import 'admin_trips.dart';
-import 'admin_wallet.dart';
 import 'admin_settings.dart';
 
 class AdminShell extends StatefulWidget {
@@ -76,7 +75,6 @@ class _AdminShellState extends State<AdminShell> {
           0 => AdminOverview(onOpen: _go),
           1 => const AdminDrivers(),
           2 => const AdminTrips(),
-          3 => const AdminWallet(),
           _ => const AdminSettings(),
         },
       ),
@@ -134,9 +132,8 @@ class _Sidebar extends StatelessWidget {
     final items = [
       (PhosphorIconsFill.squaresFour, 'Overview', 0, sos, true),
       (PhosphorIconsFill.identificationCard, 'Driver verification', 1, pending, false),
-      (PhosphorIconsFill.receipt, 'Trips & payouts', 2, 0, false),
-      (PhosphorIconsFill.wallet, 'Wallet top-ups', 3, 0, false),
-      (PhosphorIconsFill.gear, 'Prices & settings', 4, 0, false),
+      (PhosphorIconsFill.receipt, 'Trips', 2, 0, false),
+      (PhosphorIconsFill.gear, 'Prices & settings', 3, 0, false),
     ];
     return Container(
       color: TR.navy,
@@ -154,7 +151,7 @@ class _Sidebar extends StatelessWidget {
                   decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12)),
-                  child: Image.asset('assets/images/logo.png'),
+                  child: Image.asset('assets/images/logo_mark.png'),
                 ),
                 const SizedBox(width: 10),
                 Column(

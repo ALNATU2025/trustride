@@ -41,10 +41,8 @@ class _HistoryTabState extends State<HistoryTab> {
             return ListView(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
               children: [
-                Text('My trips', style: TS.h2),
-                const SizedBox(height: 4),
-                Text('${done.length} completed · ${TR.le(total)} spent',
-                    style: TS.small),
+                ScreenTitle('My trips',
+                    subtitle: '${done.length} completed · ${TR.le(total)} spent'),
                 const SizedBox(height: 16),
                 if (snap.hasError)
                   const EmptyState(
@@ -176,11 +174,22 @@ class _TripCard extends StatelessWidget {
                 style: TS.small),
             if (trip.hasDriver)
               Text('Driver: ${trip.driverName} · ${trip.driverPlate}', style: TS.small),
-            Text('Paid by ${trip.payment == 'wallet' ? 'TrustRide Wallet' : 'cash'}'
+            Text('Paid by ${trip.payment == 'transfer' ? 'transfer to driver' : 'cash'}'
                 '${trip.tip > 0 ? ' · tip ${TR.le(trip.tip)}' : ''}',
                 style: TS.small),
             Text('Trip ID: ${trip.id}', style: TS.small.copyWith(fontSize: 11)),
             const SizedBox(height: 18),
+            TRButton(
+              label: 'Ride again',
+              icon: PhosphorIconsBold.arrowsClockwise,
+              height: 50,
+              onPressed: () {
+                Navigator.pop(c);
+                AppScope.read(context).rebookFrom(trip);
+                Navigator.of(context).pushNamed(R.chooseRide);
+              },
+            ),
+            const SizedBox(height: 10),
             TRButton(
               label: support.isEmpty ? 'Support coming soon' : 'Call support',
               kind: BtnKind.outline,

@@ -109,7 +109,7 @@ class _OtpScreenState extends State<OtpScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
           children: [
-            const Align(alignment: Alignment.centerLeft, child: TRBack()),
+            const Row(children: [TRBack(), Spacer(), LogoMark()]),
             const SizedBox(height: 28),
             Align(
               alignment: Alignment.centerLeft,

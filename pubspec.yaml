@@ -20,6 +20,10 @@ dependencies:
   http: ^1.2.2
   # Calls, SMS and navigation hand-off
   url_launcher: ^6.3.0
+  # Profile photos, app lock (PIN + fingerprint/face)
+  image_picker: ^1.1.2
+  local_auth: ^3.0.0
+  flutter_secure_storage: ">=9.2.2 <12.0.0"
   # Look and feel
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.0

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
-import '../../core/app_state.dart';
 import '../../core/icons.dart';
 import '../../core/models.dart';
 import '../../core/routes.dart';
@@ -46,7 +45,6 @@ class _RateScreenState extends State<RateScreen> {
       Navigator.of(context).pushNamedAndRemoveUntil(R.rider, (_) => false);
 
   Future<void> _submit(Trip t) async {
-    final s = AppScope.read(context);
     setState(() => _saving = true);
     try {
       await Db.rateTrip(
@@ -55,7 +53,6 @@ class _RateScreenState extends State<RateScreen> {
         tags: _tags.toList(),
         comment: _comment.text.trim(),
         tip: _tip.toDouble(),
-        uid: s.authUser!.uid,
       );
       if (!mounted) return;
       showToast(context, 'Thanks! Your feedback keeps TrustRide safe',
@@ -70,7 +67,6 @@ class _RateScreenState extends State<RateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final s = AppScope.of(context);
     return Scaffold(
       body: SafeArea(
         child: FutureBuilder<Trip?>(
@@ -83,13 +79,12 @@ class _RateScreenState extends State<RateScreen> {
                 child: TRButton(label: 'Back to home', expand: false, onPressed: _home),
               );
             }
-            final wallet = t.payment == 'wallet';
-            final balance = s.profile?.wallet ?? 0;
             return ListView(
-              padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
               children: [
+                const Align(alignment: Alignment.centerRight, child: LogoMark()),
                 Center(
-                  child: Avatar(t.driverInitials, size: 96, ring: true)
+                  child: Avatar(t.driverInitials, photo: t.driverPhoto, size: 96, ring: true)
                       .animate()
                       .scale(curve: Curves.easeOutBack, duration: 500.ms),
                 ),
@@ -162,9 +157,7 @@ class _RateScreenState extends State<RateScreen> {
                 ),
                 const SizedBox(height: 20),
                 Text(
-                    wallet
-                        ? 'Add a tip from your wallet'
-                        : 'Did you give a cash tip? (for our records)',
+                    'Add a tip? Give it to your driver directly — we record it for them.',
                     style: TS.small.copyWith(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
                 Row(
@@ -174,11 +167,10 @@ class _RateScreenState extends State<RateScreen> {
                         child: Padding(
                           padding: EdgeInsets.only(right: i < 3 ? 8 : 0),
                           child: Opacity(
-                            opacity: wallet && _tips[i] > balance ? 0.4 : 1,
+                            opacity: 1,
                             child: SelectTile(
                               selected: _tip == _tips[i],
                               onTap: () {
-                                if (wallet && _tips[i] > balance) return;
                                 setState(() => _tip = _tips[i]);
                               },
                               padding: const EdgeInsets.symmetric(vertical: 12),

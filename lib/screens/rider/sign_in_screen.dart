@@ -62,11 +62,13 @@ class _SignInScreenState extends State<SignInScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
           children: [
-            Image.asset('assets/images/logo.png',
-                    width: 96, height: 96, semanticLabel: 'TrustRide')
-                .animate()
-                .fadeIn()
-                .scale(begin: const Offset(0.8, 0.8)),
+            Center(
+              child: Image.asset('assets/images/logo.png',
+                      width: 200, semanticLabel: 'TrustRide')
+                  .animate()
+                  .fadeIn()
+                  .scale(begin: const Offset(0.8, 0.8), curve: Curves.easeOutBack),
+            ),
             const SizedBox(height: 20),
             Text('Enter your phone number', style: TS.h2),
             const SizedBox(height: 8),

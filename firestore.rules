@@ -1,18 +1,17 @@
 rules_version = '2';
 
 // TrustRide Firestore security rules.
-// Publish in Firebase console → Firestore Database → Rules, or with
-// `firebase deploy --only firestore:rules`.
+// Publish in Firebase console → Firestore Database → Rules
+// (not Realtime Database), or with `firebase deploy --only firestore:rules`.
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() { return request.auth != null; }
     function uid() { return request.auth.uid; }
-    function userDoc() { return get(/databases/$(database)/documents/users/$(uid())); }
     function isAdmin() {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(uid()))
-        && userDoc().data.role == 'admin';
+        && get(/databases/$(database)/documents/users/$(uid())).data.role == 'admin';
     }
     function isApprovedDriver() {
       return signedIn()
@@ -20,6 +19,10 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/drivers/$(uid())).data.status == 'approved';
     }
     function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function tripDoc(tripId) { return get(/databases/$(database)/documents/trips/$(tripId)).data; }
+    function inTrip(tripId) {
+      return signedIn() && (tripDoc(tripId).riderId == uid() || tripDoc(tripId).driverId == uid());
+    }
 
     // Prices and business settings: everyone reads, admins edit.
     match /config/{id} {
@@ -27,43 +30,31 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Rider profiles. Only admins can change role or add wallet credit.
-    // A rider may only lower their own balance (paying for rides/tips).
+    // Rider profiles. Only admins can change someone's role.
     match /users/{userId} {
       allow read: if signedIn() && (uid() == userId || isAdmin());
       allow create: if signedIn() && uid() == userId
-        && request.resource.data.role == 'rider'
-        && request.resource.data.wallet == 0;
+        && request.resource.data.role == 'rider';
       allow update: if isAdmin()
-        || (signedIn() && uid() == userId && !changed().hasAny(['role', 'wallet']))
-        || (signedIn() && uid() == userId && changed().hasOnly(['wallet'])
-            && request.resource.data.wallet < resource.data.wallet
-            && request.resource.data.wallet >= 0);
+        || (signedIn() && uid() == userId && !changed().hasAny(['role']));
       allow delete: if false;
     }
 
-    // Wallet ledger. Riders may only record their own debits.
-    match /walletTx/{id} {
-      allow read: if signedIn() && (resource.data.uid == uid() || isAdmin());
-      allow create: if isAdmin()
-        || (signedIn() && request.resource.data.uid == uid() && request.resource.data.amount < 0);
-      allow update, delete: if false;
-    }
-
-    // Driver applications and live location.
+    // Driver applications, payment account and live location.
     match /drivers/{driverId} {
       allow read: if signedIn();
       allow create: if signedIn() && uid() == driverId
         && request.resource.data.status == 'pending'
-        && request.resource.data.ratingCount == 0;
+        && request.resource.data.ratingCount == 0
+        && request.resource.data.commissionPaid == 0;
       allow update: if isAdmin()
-        // driver edits own details / online / location, not their status or rating
+        // driver edits own details / online / location / photo
         || (signedIn() && uid() == driverId
-            && !changed().hasAny(['status', 'rejectReason', 'ratingSum', 'ratingCount']))
+            && !changed().hasAny(['status', 'rejectReason', 'ratingSum', 'ratingCount', 'commissionPaid']))
         // driver re-applies after a rejection
         || (signedIn() && uid() == driverId && resource.data.status == 'rejected'
             && request.resource.data.status == 'pending'
-            && !changed().hasAny(['ratingSum', 'ratingCount']))
+            && !changed().hasAny(['ratingSum', 'ratingCount', 'commissionPaid']))
         // a rider adds one rating of 1–5 stars
         || (signedIn() && changed().hasOnly(['ratingSum', 'ratingCount'])
             && request.resource.data.ratingCount == resource.data.ratingCount + 1
@@ -87,33 +78,53 @@ service cloud.firestore {
         && request.resource.data.paid == false;
 
       allow update: if isAdmin()
-        // rider: cancel, pay, rate, tip, SOS — never fare or driver fields
+        // rider changes their offer while still searching
+        || (signedIn() && resource.data.riderId == uid()
+            && resource.data.status == 'requested'
+            && request.resource.data.status == 'requested'
+            && changed().hasOnly(['fare', 'updatedAt']))
+        // rider picks a driver's offer: driver and price must match that offer
+        || (signedIn() && resource.data.riderId == uid()
+            && resource.data.status == 'requested'
+            && request.resource.data.status == 'accepted'
+            && exists(/databases/$(database)/documents/trips/$(tripId)/offers/$(request.resource.data.driverId))
+            && request.resource.data.fare == get(/databases/$(database)/documents/trips/$(tripId)/offers/$(request.resource.data.driverId)).data.price
+            && changed().hasOnly(['status', 'driverId', 'driverName', 'driverPhone', 'driverPhoto',
+                                   'driverPlate', 'driverVehicle', 'driverRating', 'driverAccount',
+                                   'fare', 'acceptedAt', 'updatedAt']))
+        // rider: cancel, confirm payment, rate, tip, SOS — never fare or driver
         || (signedIn() && resource.data.riderId == uid()
             && changed().hasOnly(['status', 'cancelledBy', 'cancelledAt', 'paid', 'rating',
                                    'tags', 'comment', 'tip', 'sos', 'updatedAt'])
             && (request.resource.data.status == resource.data.status
                 || request.resource.data.status == 'cancelled'))
-        // approved driver accepts an open request
-        || (isApprovedDriver() && resource.data.status == 'requested'
-            && request.resource.data.status == 'accepted'
-            && request.resource.data.driverId == uid()
-            && changed().hasOnly(['status', 'driverId', 'driverName', 'driverPhone', 'driverPlate',
-                                   'driverVehicle', 'driverRating', 'acceptedAt', 'updatedAt']))
-        // assigned driver moves the trip along or marks cash collected
+        // assigned driver moves the trip along or confirms payment
         || (signedIn() && resource.data.driverId == uid()
             && changed().hasOnly(['status', 'arrivedAt', 'startedAt', 'completedAt', 'paid',
                                    'cancelledBy', 'cancelledAt', 'updatedAt']));
       allow delete: if false;
-    }
 
-    // Driver cash-out requests.
-    match /payouts/{id} {
-      allow read: if signedIn() && (resource.data.driverId == uid() || isAdmin());
-      allow create: if signedIn() && request.resource.data.driverId == uid()
-        && request.resource.data.status == 'requested'
-        && request.resource.data.amount > 0;
-      allow update: if isAdmin();
-      allow delete: if false;
+      // Drivers' prices for an open request.
+      match /offers/{driverId} {
+        allow read: if signedIn()
+          && (tripDoc(tripId).riderId == uid() || driverId == uid() || isAdmin());
+        allow create, update: if isApprovedDriver() && driverId == uid()
+          && request.resource.data.driverId == uid()
+          && request.resource.data.price > 0
+          && tripDoc(tripId).status == 'requested';
+        allow delete: if signedIn() && driverId == uid();
+      }
+
+      // Rider ↔ driver chat.
+      match /messages/{messageId} {
+        allow read: if inTrip(tripId) || isAdmin();
+        allow create: if inTrip(tripId)
+          && request.resource.data.from == uid()
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 1000;
+        allow update, delete: if false;
+      }
     }
 
     // Emergency alerts.
